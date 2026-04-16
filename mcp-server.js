@@ -168,75 +168,92 @@ function sendNotification(method, params) {
 const TOOLS = [
   {
     name: 'notify',
-    description:
-      'Display a desktop notification popup in the bottom-right corner of the screen with a continuous beeping alarm sound. The notification will persist until the user manually clicks the dismiss button. Use this to alert the user when a long-running task completes, when urgent attention is needed, or when you want to make sure the user sees your message.',
+    description: 'Display an instant desktop notification popup with beeping alarm. Persists until user dismisses.',
     inputSchema: {
       type: 'object',
       properties: {
-        title: {
-          type: 'string',
-          description: 'The notification title (short, descriptive). Default: "Agent Notification"',
-        },
-        message: {
-          type: 'string',
-          description:
-            'The notification body text. Can be multi-line. This is the main content the user will see.',
-        },
+        title: { type: 'string', description: 'Notification title. Default: "Agent Notification"' },
+        message: { type: 'string', description: 'Notification body text (multi-line OK).' },
       },
       required: ['message'],
+    },
+  },
+  {
+    name: 'schedule_reminder',
+    description: 'Schedule a future reminder that will pop up at the specified time with beeping alarm. Use ISO 8601 local time for triggerAt.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Reminder title.' },
+        message: { type: 'string', description: 'Reminder body text.' },
+        triggerAt: { type: 'string', description: 'ISO 8601 datetime in local time, e.g. "2026-04-18T15:00:00"' },
+      },
+      required: ['message', 'triggerAt'],
+    },
+  },
+  {
+    name: 'list_schedules',
+    description: 'List all scheduled reminders with their IDs, titles, messages, and trigger times.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'delete_schedule',
+    description: 'Delete a scheduled reminder by ID. IMPORTANT: When user description is ambiguous, first use list_schedules to show options and confirm with user before deleting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The schedule ID to delete.' },
+      },
+      required: ['id'],
     },
   },
 ];
 
 async function handleToolCall(name, args) {
-  if (name === 'notify') {
-    const title = args.title || 'Agent Notification';
-    const message = args.message || '';
-
-    const running = await ensureElectronRunning();
-    if (!running) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: '❌ Failed to launch notification service. Please start it manually with: cd ccClock && npm start',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    try {
-      const res = await httpPost('/notify', { title, message });
-      if (res.data && res.data.success) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `✅ Notification displayed.\n🔔 Title: ${title}\n📝 Message: ${message}\n\n⏳ The notification is showing with a beeping alarm. It will remain on screen until the user dismisses it.`,
-            },
-          ],
-        };
-      } else {
-        return {
-          content: [
-            { type: 'text', text: `❌ Failed to display notification: ${JSON.stringify(res.data)}` },
-          ],
-          isError: true,
-        };
-      }
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `❌ Error sending notification: ${err.message}` }],
-        isError: true,
-      };
-    }
+  const running = await ensureElectronRunning();
+  if (!running) {
+    return { content: [{ type: 'text', text: 'Failed to launch notification service. Run: cd ccClock && npm start' }], isError: true };
   }
 
-  return {
-    content: [{ type: 'text', text: `Unknown tool: ${name}` }],
-    isError: true,
-  };
+  try {
+    if (name === 'notify') {
+      const res = await httpPost('/notify', { title: args.title || 'Agent Notification', message: args.message || '' });
+      if (res.data && res.data.success) {
+        return { content: [{ type: 'text', text: `Notification displayed. Title: ${args.title || 'Agent Notification'}` }] };
+      }
+      return { content: [{ type: 'text', text: `Failed: ${JSON.stringify(res.data)}` }], isError: true };
+    }
+
+    if (name === 'schedule_reminder') {
+      const res = await httpPost('/schedule', { title: args.title || 'Scheduled Reminder', message: args.message || '', triggerAt: args.triggerAt });
+      if (res.data && res.data.success) {
+        return { content: [{ type: 'text', text: `Reminder scheduled. ID: ${res.data.id}, fires at: ${res.data.triggerAt}` }] };
+      }
+      return { content: [{ type: 'text', text: `Failed: ${JSON.stringify(res.data)}` }], isError: true };
+    }
+
+    if (name === 'list_schedules') {
+      const res = await httpGet('/schedules');
+      const list = (res.data && res.data.schedules) || [];
+      if (list.length === 0) {
+        return { content: [{ type: 'text', text: 'No scheduled reminders.' }] };
+      }
+      const lines = list.map(s => `[${s.id}] "${s.title}" - ${s.triggerAt} | ${s.message}`).join('\n');
+      return { content: [{ type: 'text', text: `${list.length} scheduled reminder(s):\n${lines}` }] };
+    }
+
+    if (name === 'delete_schedule') {
+      const res = await httpPost('/schedule/delete', { id: args.id });
+      if (res.data && res.data.success) {
+        return { content: [{ type: 'text', text: `Deleted schedule: ${args.id}` }] };
+      }
+      return { content: [{ type: 'text', text: `Failed: ${JSON.stringify(res.data)}` }], isError: true };
+    }
+  } catch (err) {
+    return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+  }
+
+  return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
 }
 
 // ─── MCP message handler ───
