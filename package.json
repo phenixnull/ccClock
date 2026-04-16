@@ -1,0 +1,23 @@
+{
+  "name": "cc-notify",
+  "version": "1.0.0",
+  "description": "Agent notification tool - beeping alarm + desktop popup that requires manual dismissal",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "notify": "electron . --notify",
+    "mcp": "node mcp-server.js"
+  },
+  "keywords": [
+    "notification",
+    "agent",
+    "mcp",
+    "beep"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^41.2.1"
+  }
+}

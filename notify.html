@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CC Notify</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Microsoft YaHei', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .notification-card {
+    width: 400px;
+    min-height: 180px;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    border: 1.5px solid rgba(100, 180, 255, 0.4);
+    border-radius: 14px;
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.5),
+      0 0 20px rgba(60, 140, 255, 0.15),
+      inset 0 1px 0 rgba(255,255,255,0.05);
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    margin: 10px;
+    animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+    overflow: hidden;
+  }
+
+  @keyframes slideIn {
+    from { transform: translateX(120%); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
+
+  @keyframes slideOut {
+    from { transform: translateX(0);    opacity: 1; }
+    to   { transform: translateX(120%); opacity: 0; }
+  }
+
+  .notification-card.dismissing {
+    animation: slideOut 0.2s ease-in forwards;
+  }
+
+  /* Pulsing border glow */
+  .notification-card::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: 14px;
+    background: linear-gradient(45deg, #3c8cff, #ff6b6b, #3c8cff);
+    background-size: 300% 300%;
+    animation: borderPulse 2s ease-in-out infinite;
+    z-index: -1;
+    opacity: 0.6;
+  }
+
+  @keyframes borderPulse {
+    0%, 100% { background-position: 0% 50%; opacity: 0.4; }
+    50%      { background-position: 100% 50%; opacity: 0.8; }
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px 8px 16px;
+    gap: 10px;
+  }
+
+  .bell-icon {
+    width: 28px;
+    height: 28px;
+    animation: ring 0.6s ease-in-out infinite alternate;
+    filter: drop-shadow(0 0 6px rgba(255, 180, 50, 0.6));
+  }
+
+  @keyframes ring {
+    0%   { transform: rotate(-12deg); }
+    100% { transform: rotate(12deg); }
+  }
+
+  .title {
+    color: #ffd666;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-shadow: 0 0 10px rgba(255, 214, 102, 0.3);
+    flex: 1;
+  }
+
+  /* Message body */
+  .body {
+    padding: 4px 18px 14px 18px;
+    flex: 1;
+  }
+
+  .message {
+    color: #e0e8f0;
+    font-size: 14px;
+    line-height: 1.7;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+
+  /* Dismiss button */
+  .footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 14px 12px 14px;
+  }
+
+  .dismiss-btn {
+    background: linear-gradient(135deg, #3c8cff 0%, #2563eb 100%);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 28px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: all 0.2s;
+    box-shadow: 0 2px 8px rgba(60, 140, 255, 0.3);
+    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  }
+
+  .dismiss-btn:hover {
+    background: linear-gradient(135deg, #5ba0ff 0%, #3b7dff 100%);
+    box-shadow: 0 4px 16px rgba(60, 140, 255, 0.5);
+    transform: translateY(-1px);
+  }
+
+  .dismiss-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 4px rgba(60, 140, 255, 0.3);
+  }
+
+  /* Beep indicator */
+  .beep-indicator {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ff4d4d;
+    animation: blink 0.5s ease-in-out infinite alternate;
+    box-shadow: 0 0 8px rgba(255, 77, 77, 0.6);
+  }
+
+  @keyframes blink {
+    from { opacity: 1; }
+    to   { opacity: 0.3; }
+  }
+</style>
+</head>
+<body>
+
+<div class="notification-card" id="card">
+  <div class="beep-indicator"></div>
+  <div class="header">
+    <!-- Bell SVG icon -->
+    <svg class="bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C10.343 2 9 3.343 9 5V5.28C6.607 6.248 5 8.618 5 11.5V16L3 18V19H21V18L19 16V11.5C19 8.618 17.393 6.248 15 5.28V5C15 3.343 13.657 2 12 2Z" fill="#ffd666"/>
+      <path d="M10 20C10 21.1046 10.8954 22 12 22C13.1046 22 14 21.1046 14 20H10Z" fill="#ffd666"/>
+    </svg>
+    <span class="title" id="notif-title">Agent Notification</span>
+  </div>
+  <div class="body">
+    <p class="message" id="notif-message">Loading...</p>
+  </div>
+  <div class="footer">
+    <button class="dismiss-btn" id="dismiss-btn">&#x786E;&#x8BA4;&#x5173;&#x95ED;</button>
+  </div>
+</div>
+
+<script>
+  // ─── Beeping sound using Web Audio API ───
+  let audioCtx = null;
+  let beepInterval = null;
+  let isDismissing = false;
+
+  function startBeeping() {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      console.error('AudioContext failed:', e);
+      return;
+    }
+
+    function beep() {
+      if (!audioCtx || audioCtx.state === 'closed') return;
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.type = 'square';
+        osc.frequency.value = 1200;
+
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + 0.12);
+      } catch (e) {
+        // Ignore errors from closing context
+      }
+    }
+
+    beep();
+    beepInterval = setInterval(beep, 600);
+  }
+
+  function stopBeeping() {
+    // 1. Stop the interval FIRST (instant, no lag)
+    if (beepInterval) {
+      clearInterval(beepInterval);
+      beepInterval = null;
+    }
+    // 2. Close audio context in background (don't await)
+    if (audioCtx) {
+      const ctx = audioCtx;
+      audioCtx = null; // Prevent further beeps immediately
+      ctx.close().catch(() => {}); // Fire and forget
+    }
+  }
+
+  // ─── Receive notification data from main process ───
+  window.ccNotify.onShowNotification(({ title, message }) => {
+    document.getElementById('notif-title').textContent = title;
+    document.getElementById('notif-message').textContent = message;
+    isDismissing = false;
+    startBeeping();
+  });
+
+  // ─── Dismiss: instant stop + close ───
+  document.getElementById('dismiss-btn').addEventListener('click', () => {
+    if (isDismissing) return; // Prevent double-click
+    isDismissing = true;
+
+    // 1. Stop sound immediately
+    stopBeeping();
+
+    // 2. Add slide-out animation
+    const card = document.getElementById('card');
+    card.classList.add('dismissing');
+
+    // 3. Tell main process to close window after short animation
+    setTimeout(() => {
+      window.ccNotify.dismiss();
+    }, 150);
+  });
+</script>
+
+</body>
+</html>
