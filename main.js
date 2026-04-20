@@ -3,9 +3,19 @@ const path = require('path');
 const http = require('http');
 const fs = require('fs');
 const crypto = require('crypto');
+const {
+  DEFAULT_MAX_ACTIVE_WINDOWS,
+  createNotificationQueue,
+} = require('./notification-queue');
 
 // ─── State ───
-const activeWindows = []; // [{ id, win, height, colorIndex }]
+const notificationQueue = createNotificationQueue({
+  maxActive: DEFAULT_MAX_ACTIVE_WINDOWS,
+  onEvict(entry) {
+    destroyNotificationWindow(entry);
+  },
+});
+const activeWindows = notificationQueue.entries(); // [{ id, win, height, colorIndex }]
 let httpServer = null;
 let schedules = [];
 let schedulerTimer = null;
@@ -99,7 +109,20 @@ document.getElementById('x').addEventListener('click',dismiss);
 </script></body></html>`;
 }
 // ─── Window positioning ───
+function removeDestroyedWindows() {
+  notificationQueue.removeWhere((entry) => !entry || !entry.win || entry.win.isDestroyed());
+}
+
+function destroyNotificationWindow(entry) {
+  if (!entry || !entry.win || entry.win.isDestroyed()) {
+    return;
+  }
+
+  entry.win.destroy();
+}
+
 function repositionWindows() {
+  removeDestroyedWindows();
   const display = screen.getPrimaryDisplay();
   const workArea = display.workArea;
   let bottomY = workArea.y + workArea.height - M;
@@ -114,20 +137,17 @@ function repositionWindows() {
 
 // ─── Create notification window ───
 function createNotificationWindow(title, message) {
+  removeDestroyedWindows();
   const ci = colorCounter % THEMES.length;
   colorCounter++;
   const display = screen.getPrimaryDisplay();
   const workArea = display.workArea;
   const initH = 200;
 
-  // Calculate initial Y position stacked above existing windows
-  let bottomY = workArea.y + workArea.height - M;
-  for (const e of activeWindows) { bottomY -= (e.height || initH) + GAP; }
-
   const win = new BrowserWindow({
     width: W, height: initH,
     x: workArea.x + workArea.width - W - M,
-    y: bottomY - initH,
+    y: workArea.y + workArea.height - initH - M,
     frame: false, transparent: true, alwaysOnTop: true,
     resizable: false, skipTaskbar: false, focusable: true, show: false,
     icon: path.join(__dirname, 'icon.ico'),
@@ -139,7 +159,8 @@ function createNotificationWindow(title, message) {
 
   const id = crypto.randomUUID();
   const entry = { id, win, height: initH, colorIndex: ci };
-  activeWindows.push(entry);
+  notificationQueue.add(entry);
+  repositionWindows();
 
   const pending = { title, message };
   win.loadURL('http://127.0.0.1:' + PORT + '/ui?theme=' + ci);
@@ -151,8 +172,7 @@ function createNotificationWindow(title, message) {
   });
 
   win.on('closed', () => {
-    const idx = activeWindows.findIndex(w => w.id === id);
-    if (idx !== -1) activeWindows.splice(idx, 1);
+    notificationQueue.removeById(id);
     repositionWindows();
   });
 }
@@ -190,8 +210,15 @@ function startHttpServer() {
     }
 
     if (req.method === 'GET' && p === '/health') {
+      removeDestroyedWindows();
       res.writeHead(200, { 'Content-Type':'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ status:'ok', service:'cc-notify', windows: activeWindows.length, schedules: schedules.length }));
+      res.end(JSON.stringify({
+        status:'ok',
+        service:'cc-notify',
+        maxWindows: DEFAULT_MAX_ACTIVE_WINDOWS,
+        windows: activeWindows.length,
+        schedules: schedules.length,
+      }));
       return;
     }
 
@@ -241,8 +268,9 @@ function startHttpServer() {
 
     // Dismiss all active windows
     if (req.method === 'POST' && p === '/dismiss') {
+      removeDestroyedWindows();
       const closed = activeWindows.length;
-      [...activeWindows].forEach(e => { if (!e.win.isDestroyed()) e.win.destroy(); });
+      [...activeWindows].forEach(destroyNotificationWindow);
       jsonOk(res, { success:true, closed });
       return;
     }
