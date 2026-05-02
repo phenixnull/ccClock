@@ -182,7 +182,8 @@ async function main() {
     console.log('  node send-notify.js --delete <id>');
     console.log('  node send-notify.js "Title" "Message"');
     console.log('');
-    console.log('Recurring JSON: {"title":"Hydrate","message":"Drink water","startAt":"2026-05-02T00:00:00","endAt":"2026-05-02T23:59:00","intervalMinutes":30}');
+    console.log('Recurring JSON: {"title":"Hydrate","message":"Drink water","intervalMinutes":30}');
+    console.log('Optional range: add "startAt" and/or "endAt"; omitted startAt defaults to now, omitted endAt defaults to 23:59:59 on the startAt date.');
     process.exit(1);
   }
 

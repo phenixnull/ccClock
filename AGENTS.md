@@ -45,8 +45,10 @@ HTTP 服务固定监听 `127.0.0.1:17329`
 ```bash
 curl -X POST http://127.0.0.1:17329/schedule/recurring \
   -H "Content-Type: application/json" \
-  -d '{"title":"喝水提醒","message":"喝点水，活动一下","startAt":"2026-05-02T00:00:00","endAt":"2026-05-02T23:59:00","intervalMinutes":30}'
+  -d '{"title":"喝水提醒","message":"喝点水，活动一下","intervalMinutes":30}'
 ```
+
+如果未指定 `startAt`，默认从创建任务的当前本地时间开始；如果未指定 `endAt`，默认到 `startAt` 当天的 `23:59:59`。如果用户指定了开始/结束时间，则只在指定范围内生效。
 
 命令行方式：
 

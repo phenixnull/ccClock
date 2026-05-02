@@ -69,6 +69,43 @@ test('recurring schedules start at the next occurrence inside the date range', (
   assert.equal(schedule.nextTriggerAt, '2026-05-02T16:30:00');
 });
 
+test('recurring schedules default to now through the end of the same day', () => {
+  const schedule = createRecurringSchedule(
+    {
+      title: 'Default range',
+      message: 'Every five minutes today',
+      intervalMinutes: 5,
+    },
+    {
+      id: 'repeat-default',
+      now: new Date('2026-05-02T16:26:12'),
+    }
+  );
+
+  assert.equal(schedule.startAt, '2026-05-02T16:26:12');
+  assert.equal(schedule.endAt, '2026-05-02T23:59:59');
+  assert.equal(schedule.nextTriggerAt, '2026-05-02T16:26:12');
+});
+
+test('recurring schedules default endAt to 23:59:59 on the startAt date', () => {
+  const schedule = createRecurringSchedule(
+    {
+      title: 'Default end',
+      message: 'Every thirty minutes today',
+      startAt: '2026-05-02T08:15:00',
+      intervalMinutes: 30,
+    },
+    {
+      id: 'repeat-default-end',
+      now: new Date('2026-05-02T07:00:00'),
+    }
+  );
+
+  assert.equal(schedule.startAt, '2026-05-02T08:15:00');
+  assert.equal(schedule.endAt, '2026-05-02T23:59:59');
+  assert.equal(schedule.nextTriggerAt, '2026-05-02T08:15:00');
+});
+
 test('recurring schedules fire once per due check and advance to the next occurrence', () => {
   const schedule = createRecurringSchedule(
     {

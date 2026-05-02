@@ -39,6 +39,18 @@ function parseIntervalMinutes(value) {
   return intervalMinutes;
 }
 
+function endOfDay(date) {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    23,
+    59,
+    59,
+    0
+  );
+}
+
 function createSingleSchedule(data, options = {}) {
   const triggerAt = parseDateTime(data.triggerAt, 'triggerAt');
   const now = parseDateTime(options.now || new Date(), 'now');
@@ -108,9 +120,13 @@ function addInterval(date, intervalMinutes) {
 }
 
 function createRecurringSchedule(data, options = {}) {
-  const startAt = parseDateTime(data.startAt, 'startAt');
-  const endAt = parseDateTime(data.endAt, 'endAt');
   const now = parseDateTime(options.now || new Date(), 'now');
+  const startAt = data.startAt === undefined || data.startAt === null || data.startAt === ''
+    ? new Date(now.getTime())
+    : parseDateTime(data.startAt, 'startAt');
+  const endAt = data.endAt === undefined || data.endAt === null || data.endAt === ''
+    ? endOfDay(startAt)
+    : parseDateTime(data.endAt, 'endAt');
   const intervalMinutes = parseIntervalMinutes(data.intervalMinutes);
 
   if (endAt.getTime() < startAt.getTime()) {

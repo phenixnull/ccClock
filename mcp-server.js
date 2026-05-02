@@ -199,17 +199,17 @@ const TOOLS = [
   },
   {
     name: 'schedule_recurring_reminder',
-    description: 'Schedule a recurring reminder inside a date/time range. Use ISO 8601 local time for startAt and endAt, and intervalMinutes for the repeat interval.',
+    description: 'Schedule a recurring reminder. startAt and endAt are optional ISO 8601 local datetimes; omitted startAt defaults to now, omitted endAt defaults to 23:59:59 on the startAt date.',
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Reminder title.' },
         message: { type: 'string', description: 'Reminder body text.' },
-        startAt: { type: 'string', description: 'ISO 8601 local start datetime, e.g. "2026-05-02T00:00:00"' },
-        endAt: { type: 'string', description: 'ISO 8601 local end datetime, e.g. "2026-05-02T23:59:00"' },
+        startAt: { type: 'string', description: 'Optional ISO 8601 local start datetime. Defaults to now when omitted.' },
+        endAt: { type: 'string', description: 'Optional ISO 8601 local end datetime. Defaults to 23:59:59 on the startAt date when omitted.' },
         intervalMinutes: { type: 'integer', description: 'Repeat interval in minutes, e.g. 30.' },
       },
-      required: ['message', 'startAt', 'endAt', 'intervalMinutes'],
+      required: ['message', 'intervalMinutes'],
     },
   },
   {
