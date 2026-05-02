@@ -37,3 +37,35 @@ node send-notify.js "标题" "消息内容"
 
 ## 端口
 HTTP 服务固定监听 `127.0.0.1:17329`
+
+## 周期提醒
+
+除了原有的单次提醒 `POST /schedule`，现在也支持指定日期时间范围内的周期提醒：
+
+```bash
+curl -X POST http://127.0.0.1:17329/schedule/recurring \
+  -H "Content-Type: application/json" \
+  -d '{"title":"喝水提醒","message":"喝点水，活动一下","startAt":"2026-05-02T00:00:00","endAt":"2026-05-02T23:59:00","intervalMinutes":30}'
+```
+
+命令行方式：
+
+```bash
+node send-notify.js --repeat --file repeat.json
+```
+
+MCP 工具名：`schedule_recurring_reminder`。
+
+## 任务队列
+
+提醒任务按两个列表保存：
+
+- `pending`：未完成通知。单次和周期提醒新建后都进入这里。
+- `completed`：已完成通知。单次提醒触发后进入这里；周期提醒必须在指定时间范围内所有提醒点都触发完成后，才进入这里。
+
+列表接口：
+
+```bash
+curl http://127.0.0.1:17329/schedules
+node send-notify.js --list
+```

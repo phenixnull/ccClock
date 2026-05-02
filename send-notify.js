@@ -9,6 +9,7 @@
  *   node send-notify.js "Title" "Message"             (instant, ASCII only on Windows)
  *
  *   node send-notify.js --schedule --file sched.json  (schedule a future reminder)
+ *   node send-notify.js --repeat --file repeat.json    (schedule a recurring reminder)
  *   node send-notify.js --list                        (list all scheduled reminders)
  *   node send-notify.js --delete <id>                 (delete a scheduled reminder)
  */
@@ -94,6 +95,37 @@ function httpGet(urlPath) {
   });
 }
 
+function describeSchedule(schedule) {
+  const type = schedule.type === 'recurring' ? 'recurring' : 'single';
+  const base = `[${schedule.id}] ${type} "${schedule.title}"`;
+  if (type === 'recurring') {
+    return `${base} every ${schedule.intervalMinutes}m, ${schedule.startAt} to ${schedule.endAt}, next ${schedule.nextTriggerAt} | ${schedule.message || ''}`;
+  }
+  return `${base} ${schedule.triggerAt} | ${schedule.message || ''}`;
+}
+
+function printScheduleList(result) {
+  const pending = Array.isArray(result.pending) ? result.pending : (result.schedules || []);
+  const completed = Array.isArray(result.completed) ? result.completed : [];
+
+  console.log(`Pending reminders (${pending.length}):`);
+  if (pending.length === 0) {
+    console.log('  (none)');
+  } else {
+    pending.forEach((schedule) => console.log(`  ${describeSchedule(schedule)}`));
+  }
+
+  console.log('');
+  console.log(`Completed reminders (${completed.length}):`);
+  if (completed.length === 0) {
+    console.log('  (none)');
+  } else {
+    completed.forEach((schedule) => {
+      console.log(`  ${describeSchedule(schedule)} | completedAt: ${schedule.completedAt || 'unknown'}`);
+    });
+  }
+}
+
 // ─── Main ───
 async function main() {
   const args = process.argv.slice(2);
@@ -102,7 +134,11 @@ async function main() {
   if (args[0] === '--list') {
     if (!(await ensureService())) { console.error('Service unavailable.'); process.exit(1); }
     const result = await httpGet('/schedules');
-    console.log(JSON.stringify(result, null, 2));
+    if (args.includes('--json')) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      printScheduleList(result);
+    }
     return;
   }
 
@@ -117,7 +153,12 @@ async function main() {
   // Parse payload from --file, --stdin, or positional args
   let jsonStr;
   const isSchedule = args.includes('--schedule');
-  const cleanArgs = args.filter(a => a !== '--schedule');
+  const isRepeat = args.includes('--repeat') || args.includes('--recurring');
+  if (isSchedule && isRepeat) {
+    console.error('Use either --schedule or --repeat, not both.');
+    process.exit(1);
+  }
+  const cleanArgs = args.filter(a => a !== '--schedule' && a !== '--repeat' && a !== '--recurring');
 
   if (cleanArgs[0] === '--file' && cleanArgs[1]) {
     jsonStr = fs.readFileSync(cleanArgs[1], 'utf-8');
@@ -135,15 +176,19 @@ async function main() {
     console.log('Usage:');
     console.log('  node send-notify.js --file payload.json');
     console.log('  node send-notify.js --schedule --file sched.json');
+    console.log('  node send-notify.js --repeat --file repeat.json');
     console.log('  node send-notify.js --list');
+    console.log('  node send-notify.js --list --json');
     console.log('  node send-notify.js --delete <id>');
     console.log('  node send-notify.js "Title" "Message"');
+    console.log('');
+    console.log('Recurring JSON: {"title":"Hydrate","message":"Drink water","startAt":"2026-05-02T00:00:00","endAt":"2026-05-02T23:59:00","intervalMinutes":30}');
     process.exit(1);
   }
 
   if (!(await ensureService())) { console.error('Service unavailable.'); process.exit(1); }
 
-  const endpoint = isSchedule ? '/schedule' : '/notify';
+  const endpoint = isRepeat ? '/schedule/recurring' : (isSchedule ? '/schedule' : '/notify');
   const result = await httpPost(endpoint, jsonStr);
   console.log(JSON.stringify(result, null, 2));
 }

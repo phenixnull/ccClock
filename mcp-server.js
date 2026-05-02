@@ -82,7 +82,13 @@ function httpGet(urlPath) {
       (res) => {
         let body = '';
         res.on('data', (chunk) => (body += chunk));
-        res.on('end', () => resolve({ status: res.statusCode, data: body }));
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode, data: JSON.parse(body) });
+          } catch {
+            resolve({ status: res.statusCode, data: body });
+          }
+        });
       }
     );
     req.on('error', reject);
@@ -192,6 +198,21 @@ const TOOLS = [
     },
   },
   {
+    name: 'schedule_recurring_reminder',
+    description: 'Schedule a recurring reminder inside a date/time range. Use ISO 8601 local time for startAt and endAt, and intervalMinutes for the repeat interval.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Reminder title.' },
+        message: { type: 'string', description: 'Reminder body text.' },
+        startAt: { type: 'string', description: 'ISO 8601 local start datetime, e.g. "2026-05-02T00:00:00"' },
+        endAt: { type: 'string', description: 'ISO 8601 local end datetime, e.g. "2026-05-02T23:59:00"' },
+        intervalMinutes: { type: 'integer', description: 'Repeat interval in minutes, e.g. 30.' },
+      },
+      required: ['message', 'startAt', 'endAt', 'intervalMinutes'],
+    },
+  },
+  {
     name: 'list_schedules',
     description: 'List all scheduled reminders with their IDs, titles, messages, and trigger times.',
     inputSchema: { type: 'object', properties: {} },
@@ -232,14 +253,52 @@ async function handleToolCall(name, args) {
       return { content: [{ type: 'text', text: `Failed: ${JSON.stringify(res.data)}` }], isError: true };
     }
 
+    if (name === 'schedule_recurring_reminder') {
+      const res = await httpPost('/schedule/recurring', {
+        title: args.title || 'Recurring Reminder',
+        message: args.message || '',
+        startAt: args.startAt,
+        endAt: args.endAt,
+        intervalMinutes: args.intervalMinutes,
+      });
+      if (res.data && res.data.success) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Recurring reminder scheduled. ID: ${res.data.id}, every ${res.data.intervalMinutes} minute(s), range: ${res.data.startAt} to ${res.data.endAt}, next fires at: ${res.data.nextTriggerAt}`,
+          }],
+        };
+      }
+      return { content: [{ type: 'text', text: `Failed: ${JSON.stringify(res.data)}` }], isError: true };
+    }
+
     if (name === 'list_schedules') {
       const res = await httpGet('/schedules');
-      const list = (res.data && res.data.schedules) || [];
-      if (list.length === 0) {
+      const pending = (res.data && res.data.pending) || [];
+      const completed = (res.data && res.data.completed) || [];
+      if (pending.length === 0 && completed.length === 0) {
         return { content: [{ type: 'text', text: 'No scheduled reminders.' }] };
       }
-      const lines = list.map(s => `[${s.id}] "${s.title}" - ${s.triggerAt} | ${s.message}`).join('\n');
-      return { content: [{ type: 'text', text: `${list.length} scheduled reminder(s):\n${lines}` }] };
+
+      const formatSchedule = (s) => {
+        if (s.type === 'recurring') {
+          return `[${s.id}] recurring "${s.title}" - every ${s.intervalMinutes}m, ${s.startAt} to ${s.endAt}, next ${s.nextTriggerAt} | ${s.message}`;
+        }
+        return `[${s.id}] single "${s.title}" - ${s.triggerAt} | ${s.message}`;
+      };
+
+      const pendingLines = pending.length > 0
+        ? pending.map(formatSchedule).join('\n')
+        : '(none)';
+      const completedLines = completed.length > 0
+        ? completed.map((s) => `${formatSchedule(s)} | completedAt: ${s.completedAt || 'unknown'}`).join('\n')
+        : '(none)';
+      return {
+        content: [{
+          type: 'text',
+          text: `Pending reminders (${pending.length}):\n${pendingLines}\n\nCompleted reminders (${completed.length}):\n${completedLines}`,
+        }],
+      };
     }
 
     if (name === 'delete_schedule') {

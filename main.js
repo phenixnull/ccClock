@@ -7,6 +7,12 @@ const {
   DEFAULT_MAX_ACTIVE_WINDOWS,
   createNotificationQueue,
 } = require('./notification-queue');
+const {
+  createRecurringSchedule,
+  createSingleSchedule,
+  evaluateSchedules,
+  normalizeScheduleStore,
+} = require('./schedule-engine');
 
 // ─── State ───
 const notificationQueue = createNotificationQueue({
@@ -17,7 +23,7 @@ const notificationQueue = createNotificationQueue({
 });
 const activeWindows = notificationQueue.entries(); // [{ id, win, height, colorIndex }]
 let httpServer = null;
-let schedules = [];
+let scheduleStore = { pending: [], completed: [] };
 let schedulerTimer = null;
 const PORT = 17329;
 const SCHEDULES_FILE = path.join(__dirname, 'schedules.json');
@@ -40,12 +46,12 @@ const THEMES = [
 function loadSchedules() {
   try {
     if (fs.existsSync(SCHEDULES_FILE)) {
-      schedules = JSON.parse(fs.readFileSync(SCHEDULES_FILE, 'utf-8'));
+      scheduleStore = normalizeScheduleStore(JSON.parse(fs.readFileSync(SCHEDULES_FILE, 'utf-8')));
     }
-  } catch { schedules = []; }
+  } catch { scheduleStore = normalizeScheduleStore(null); }
 }
 function saveSchedules() {
-  try { fs.writeFileSync(SCHEDULES_FILE, JSON.stringify(schedules, null, 2), 'utf-8'); }
+  try { fs.writeFileSync(SCHEDULES_FILE, JSON.stringify(scheduleStore, null, 2), 'utf-8'); }
   catch (e) { console.error('[cc-notify] Save error:', e.message); }
 }
 
@@ -53,12 +59,14 @@ function saveSchedules() {
 function startScheduler() {
   loadSchedules();
   schedulerTimer = setInterval(() => {
-    const now = Date.now();
-    const due = schedules.filter(s => new Date(s.triggerAt).getTime() <= now);
-    if (due.length === 0) return;
-    due.forEach(s => createNotificationWindow(s.title, s.message));
-    schedules = schedules.filter(s => new Date(s.triggerAt).getTime() > now);
-    saveSchedules();
+    const result = evaluateSchedules(scheduleStore, new Date());
+    if (result.due.length > 0) {
+      result.due.forEach(s => createNotificationWindow(s.title, s.message));
+    }
+    if (result.changed) {
+      scheduleStore = result.store;
+      saveSchedules();
+    }
   }, 1000);
 }
 // ─── Generate themed HTML ───
@@ -217,7 +225,9 @@ function startHttpServer() {
         service:'cc-notify',
         maxWindows: DEFAULT_MAX_ACTIVE_WINDOWS,
         windows: activeWindows.length,
-        schedules: schedules.length,
+        schedules: scheduleStore.pending.length,
+        pending: scheduleStore.pending.length,
+        completed: scheduleStore.completed.length,
       }));
       return;
     }
@@ -233,24 +243,47 @@ function startHttpServer() {
     // Schedule a future reminder
     if (req.method === 'POST' && p === '/schedule') {
       readBody(req, (data) => {
-        if (!data.triggerAt) { jsonErr(res, 400, 'triggerAt is required'); return; }
-        const id = crypto.randomUUID().slice(0, 8);
-        const entry = {
-          id,
-          title: data.title || 'Scheduled Reminder',
-          message: data.message || '',
-          triggerAt: data.triggerAt,
-          createdAt: new Date().toISOString(),
-        };
-        schedules.push(entry);
-        saveSchedules();
-        jsonOk(res, { success:true, id, triggerAt: entry.triggerAt });
+        try {
+          if (!data.triggerAt) { jsonErr(res, 400, 'triggerAt is required'); return; }
+          const entry = createSingleSchedule(data);
+          scheduleStore.pending.push(entry);
+          saveSchedules();
+          jsonOk(res, { success:true, id: entry.id, type: entry.type, triggerAt: entry.triggerAt });
+        } catch (e) {
+          jsonErr(res, 400, e.message);
+        }
+      }, res); return;
+    }
+
+    // Schedule a recurring reminder inside a date/time range
+    if (req.method === 'POST' && p === '/schedule/recurring') {
+      readBody(req, (data) => {
+        try {
+          const entry = createRecurringSchedule(data);
+          scheduleStore.pending.push(entry);
+          saveSchedules();
+          jsonOk(res, {
+            success:true,
+            id: entry.id,
+            type: entry.type,
+            startAt: entry.startAt,
+            endAt: entry.endAt,
+            intervalMinutes: entry.intervalMinutes,
+            nextTriggerAt: entry.nextTriggerAt,
+          });
+        } catch (e) {
+          jsonErr(res, 400, e.message);
+        }
       }, res); return;
     }
     // List all schedules
     if (req.method === 'GET' && p === '/schedules') {
       res.writeHead(200, { 'Content-Type':'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ schedules }));
+      res.end(JSON.stringify({
+        pending: scheduleStore.pending,
+        completed: scheduleStore.completed,
+        schedules: scheduleStore.pending,
+      }));
       return;
     }
 
@@ -258,9 +291,14 @@ function startHttpServer() {
     if (req.method === 'POST' && p === '/schedule/delete') {
       readBody(req, (data) => {
         if (!data.id) { jsonErr(res, 400, 'id is required'); return; }
-        const before = schedules.length;
-        schedules = schedules.filter(s => s.id !== data.id);
-        if (schedules.length === before) { jsonErr(res, 404, 'Schedule not found: ' + data.id); return; }
+        const beforePending = scheduleStore.pending.length;
+        const beforeCompleted = scheduleStore.completed.length;
+        scheduleStore.pending = scheduleStore.pending.filter(s => s.id !== data.id);
+        scheduleStore.completed = scheduleStore.completed.filter(s => s.id !== data.id);
+        if (
+          scheduleStore.pending.length === beforePending &&
+          scheduleStore.completed.length === beforeCompleted
+        ) { jsonErr(res, 404, 'Schedule not found: ' + data.id); return; }
         saveSchedules();
         jsonOk(res, { success:true, deleted: data.id });
       }, res); return;
