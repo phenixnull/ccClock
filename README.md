@@ -121,3 +121,47 @@ MCP 入口是 `mcp-server.js`。
 ```
 
 MCP 工具包括 `notify`、`schedule_reminder`、`schedule_recurring_reminder`、`list_schedules` 和 `delete_schedule`。
+
+## 注册为 Codex Skill
+
+本仓库自带完整的 Codex 技能包，位于 [`skill/`](skill/) 目录：
+
+| 文件 | 作用 |
+|---|---|
+| `skill/SKILL.md` | 技能说明与触发规则（即时通知、定时/周期提醒、编码防乱码规范） |
+| `skill/scripts/send_cc_notify_safe.js` | Node 安全发送器：`\uXXXX` 转义解码 → ASCII JSON 落盘 → 回读校验 → 调用 `send-notify.js` |
+| `skill/scripts/send_cc_notify_safe.py` | 等价的 Python 版安全发送器 |
+
+安装步骤：
+
+```powershell
+git clone https://github.com/phenixnull/ccClock.git
+cd ccClock
+npm ci
+Copy-Item -Recurse .\skill <你的Codex技能目录>\cc-notify
+```
+
+项目目录解析优先级：
+
+1. `--project-dir <path>` 参数
+2. `CC_NOTIFY_PROJECT_DIR` 环境变量
+3. 默认：脚本位置上两级的仓库根目录（skill 目录留在克隆仓库内时开箱即用）
+
+安装后 Codex 会在你说"完成后通知我"、"3 点提醒我"这类话时自动调用本技能。
+
+快速示例：
+
+```powershell
+# 中文即时通知（转义写法防 PowerShell 编码损坏）
+node skill\scripts\send_cc_notify_safe.js --title-u "\u4efb\u52a1\u5b8c\u6210" --message-u "\u6784\u5efa\u6210\u529f"
+
+# 一次性提醒
+node skill\scripts\send_cc_notify_safe.js --title-u "\u4f1a\u8bae" --message-u "15:00 \u5f00\u59cb" --schedule --trigger-at "2026-09-30T15:00:00"
+
+# 周期提醒（每 30 分钟）
+node skill\scripts\send_cc_notify_safe.js --title-u "\u559d\u6c34" --message-u "\u8d77\u8eab\u559d\u6c34" --repeat --interval-minutes 30
+```
+
+## 许可证
+
+[ISC](LICENSE)
