@@ -1,3 +1,4 @@
 node_modules/
 _msg.json
+.cc-notify-payload*.json
 schedules.json

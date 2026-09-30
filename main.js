@@ -111,7 +111,7 @@ let ac=null,iv=null,dis=false;
 function go(){try{ac=new(window.AudioContext||window.webkitAudioContext)()}catch(e){return}function bip(){if(!ac||ac.state==='closed')return;try{let o=ac.createOscillator(),g=ac.createGain();o.connect(g);g.connect(ac.destination);o.type='square';o.frequency.value=1200;g.gain.setValueAtTime(.3,ac.currentTime);g.gain.exponentialRampToValueAtTime(.01,ac.currentTime+.12);o.start(ac.currentTime);o.stop(ac.currentTime+.12)}catch(e){}}bip();iv=setInterval(bip,600)}
 function stop(){if(iv){clearInterval(iv);iv=null}if(ac){let c=ac;ac=null;c.close().catch(()=>{})}}
 function dismiss(){if(dis)return;dis=true;stop();document.getElementById('card').classList.add('dismissing');setTimeout(function(){window.ccNotify.dismiss()},150)}
-window.ccNotify.onShowNotification(function(d){document.getElementById('t').textContent=d.title;document.getElementById('m').textContent=d.message;dis=false;go();setTimeout(function(){var h=document.querySelector('.card').offsetHeight+20;window.ccNotify.reportHeight(h)},50)});
+window.ccNotify.onShowNotification(function(d){document.getElementById('t').textContent=d.title;document.getElementById('m').textContent=d.message;dis=false;if(!d.silent)go();setTimeout(function(){var h=document.querySelector('.card').offsetHeight+20;window.ccNotify.reportHeight(h)},50)});
 document.getElementById('b').addEventListener('click',dismiss);
 document.getElementById('x').addEventListener('click',dismiss);
 </script></body></html>`;
@@ -144,7 +144,7 @@ function repositionWindows() {
 }
 
 // ─── Create notification window ───
-function createNotificationWindow(title, message) {
+function createNotificationWindow(title, message, options = {}) {
   removeDestroyedWindows();
   const ci = colorCounter % THEMES.length;
   colorCounter++;
@@ -170,7 +170,7 @@ function createNotificationWindow(title, message) {
   notificationQueue.add(entry);
   repositionWindows();
 
-  const pending = { title, message };
+  const pending = { title, message, silent: options.silent === true };
   win.loadURL('http://127.0.0.1:' + PORT + '/ui?theme=' + ci);
 
   win.webContents.once('did-finish-load', () => {
@@ -235,7 +235,7 @@ function startHttpServer() {
     // Instant notification
     if (req.method === 'POST' && p === '/notify') {
       readBody(req, (data) => {
-        createNotificationWindow(data.title || 'Agent Notification', data.message || 'Task completed.');
+        createNotificationWindow(data.title || 'Agent Notification', data.message || 'Task completed.', { silent: data.silent === true });
         jsonOk(res, { success:true });
       }, res); return;
     }
