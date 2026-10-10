@@ -2,265 +2,292 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CC Notify</title>
 <style>
+  :root { {{themeStyles}} }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-
+  [hidden] { display: none !important; }
   body {
-    font-family: 'Microsoft YaHei', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
     background: transparent;
     overflow: hidden;
     user-select: none;
     -webkit-font-smoothing: antialiased;
   }
-
-  .notification-card {
+  button { font: inherit; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--ttl); outline-offset: 3px; }
+  button:disabled { cursor: wait; opacity: .6; }
+  .card {
     width: 400px;
-    min-height: 180px;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-    border: 1.5px solid rgba(100, 180, 255, 0.4);
-    border-radius: 14px;
-    box-shadow:
-      0 8px 32px rgba(0, 0, 0, 0.5),
-      0 0 20px rgba(60, 140, 255, 0.15),
-      inset 0 1px 0 rgba(255,255,255,0.05);
+    min-height: 140px;
+    max-height: 480px;
+    margin: 10px;
     display: flex;
     flex-direction: column;
-    padding: 0;
-    margin: 10px;
-    animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     position: relative;
     overflow: hidden;
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
+    animation: slideIn .35s cubic-bezier(.16,1,.3,1);
   }
-
   @keyframes slideIn {
     from { transform: translateX(120%); opacity: 0; }
-    to   { transform: translateX(0);    opacity: 1; }
+    to { transform: translateX(0); opacity: 1; }
   }
-
   @keyframes slideOut {
-    from { transform: translateX(0);    opacity: 1; }
-    to   { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(120%); opacity: 0; }
   }
-
-  .notification-card.dismissing {
-    animation: slideOut 0.2s ease-in forwards;
+  .card.dismissing { animation: slideOut .2s ease-in forwards; }
+  .card::before {
+    content: ""; position: absolute; inset: -1px; border-radius: 14px; z-index: -1; opacity: .6;
+    background: linear-gradient(45deg, var(--p1), var(--p2), var(--p1)); background-size: 300% 300%;
+    animation: pulse 2s ease-in-out infinite;
   }
-
-  /* Pulsing border glow */
-  .notification-card::before {
-    content: '';
-    position: absolute;
-    inset: -1px;
-    border-radius: 14px;
-    background: linear-gradient(45deg, #3c8cff, #ff6b6b, #3c8cff);
-    background-size: 300% 300%;
-    animation: borderPulse 2s ease-in-out infinite;
-    z-index: -1;
-    opacity: 0.6;
+  @keyframes pulse {
+    0%, 100% { background-position: 0% 50%; opacity: .4; }
+    50% { background-position: 100% 50%; opacity: .8; }
   }
-
-  @keyframes borderPulse {
-    0%, 100% { background-position: 0% 50%; opacity: 0.4; }
-    50%      { background-position: 100% 50%; opacity: 0.8; }
-  }
-
-  /* Header */
-  .header {
-    display: flex;
-    align-items: center;
-    padding: 14px 16px 8px 16px;
-    gap: 10px;
-  }
-
-  .bell-icon {
-    width: 28px;
-    height: 28px;
-    animation: ring 0.6s ease-in-out infinite alternate;
-    filter: drop-shadow(0 0 6px rgba(255, 180, 50, 0.6));
-  }
-
+  .hdr { display: flex; align-items: center; padding: 14px 88px 8px 16px; gap: 10px; flex-shrink: 0; }
+  .bell { width: 28px; height: 28px; flex-shrink: 0; animation: ring .6s ease-in-out infinite alternate; }
+  .bell path { fill: var(--bellFill); }
   @keyframes ring {
-    0%   { transform: rotate(-12deg); }
-    100% { transform: rotate(12deg); }
+    from { transform: rotate(-12deg); }
+    to { transform: rotate(12deg); }
   }
-
-  .title {
-    color: #ffd666;
-    font-size: 16px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    text-shadow: 0 0 10px rgba(255, 214, 102, 0.3);
-    flex: 1;
+  .ttl { color: var(--ttl); font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .body { padding: 4px 18px 14px; flex: 1; min-height: 0; overflow-y: auto; }
+  .msg { color: #e0e8f0; font-size: 14px; line-height: 1.7; word-break: break-word; white-space: pre-wrap; }
+  .icon-btn {
+    position: absolute; top: 10px; width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 6px; background: rgba(255,255,255,.1);
+    color: #c6d2e1; transition: background .15s;
   }
-
-  /* Message body */
-  .body {
-    padding: 4px 18px 14px 18px;
-    flex: 1;
-  }
-
-  .message {
+  .icon-btn:hover, .icon-btn[aria-expanded="true"] { background: rgba(255,255,255,.22); color: #fff; }
+  .settings-btn { right: 46px; }
+  .settings-btn svg { width: 17px; height: 17px; }
+  .close-x { right: 12px; font-size: 20px; }
+  .close-x:hover { background: rgba(255,80,80,.6); }
+  .settings {
+    flex-shrink: 0; margin: 0 14px 8px; padding: 12px;
+    background: rgba(0,0,0,.2); border: 1px solid rgba(255,255,255,.12); border-radius: 10px;
     color: #e0e8f0;
-    font-size: 14px;
-    line-height: 1.7;
-    word-break: break-word;
-    white-space: pre-wrap;
   }
-
-  /* Dismiss button */
-  .footer {
-    display: flex;
-    justify-content: flex-end;
-    padding: 0 14px 12px 14px;
+  .settings h2 { font-size: 12px; font-weight: 600; color: var(--ttl); margin-bottom: 10px; }
+  .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .setting-row + .setting-row { border-top: 1px solid rgba(255,255,255,.1); margin-top: 12px; padding-top: 12px; }
+  .setting-label { font-size: 13px; line-height: 1.5; }
+  .setting-hint { font-size: 11px; color: #aebdce; line-height: 1.6; margin-top: 2px; }
+  .switch {
+    width: 42px; height: 24px; flex-shrink: 0; position: relative;
+    border: 1px solid rgba(255,255,255,.25); border-radius: 12px; background: rgba(255,255,255,.12);
+    transition: background .15s;
   }
-
-  .dismiss-btn {
-    background: linear-gradient(135deg, #3c8cff 0%, #2563eb 100%);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    padding: 8px 28px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    letter-spacing: 0.5px;
-    transition: all 0.2s;
-    box-shadow: 0 2px 8px rgba(60, 140, 255, 0.3);
-    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  .switch::after {
+    content: ""; position: absolute; width: 16px; height: 16px; top: 3px; left: 3px;
+    border-radius: 50%; background: #fff; transition: transform .15s;
   }
-
-  .dismiss-btn:hover {
-    background: linear-gradient(135deg, #5ba0ff 0%, #3b7dff 100%);
-    box-shadow: 0 4px 16px rgba(60, 140, 255, 0.5);
-    transform: translateY(-1px);
-  }
-
-  .dismiss-btn:active {
-    transform: translateY(0);
-    box-shadow: 0 1px 4px rgba(60, 140, 255, 0.3);
-  }
-
-  /* Beep indicator */
-  .beep-indicator {
-    position: absolute;
-    top: 16px;
-    right: 16px;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: #ff4d4d;
-    animation: blink 0.5s ease-in-out infinite alternate;
-    box-shadow: 0 0 8px rgba(255, 77, 77, 0.6);
-  }
-
-  @keyframes blink {
-    from { opacity: 1; }
-    to   { opacity: 0.3; }
-  }
+  .switch[aria-checked="true"] { background: var(--p1); border-color: var(--p1); }
+  .switch[aria-checked="true"]::after { transform: translateX(18px); }
+  .settings-status { font-size: 11px; line-height: 1.5; color: #b9c9da; }
+  .settings-status:not(:empty) { margin-top: 10px; }
+  .settings-status.error { color: #ffb4b4; }
+  .ftr { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px 12px; flex-shrink: 0; }
+  .sound-status { display: flex; align-items: center; gap: 6px; color: #b9c9da; font-size: 11px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dot); animation: blink .5s ease-in-out infinite alternate; }
+  @keyframes blink { to { opacity: .3; } }
+  .card.muted .dot { background: #90a0b3; animation: none; }
+  .card.muted .bell { animation: none; opacity: .65; }
+  .btn { background: var(--btn); color: #fff; border: 0; border-radius: 8px; padding: 8px 28px; font-size: 13px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.2); transition: background .2s, transform .2s; }
+  .btn:hover { background: var(--btnH); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
 </style>
 </head>
 <body>
-
-<div class="notification-card" id="card">
-  <div class="beep-indicator"></div>
-  <div class="header">
-    <!-- Bell SVG icon -->
-    <svg class="bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 2C10.343 2 9 3.343 9 5V5.28C6.607 6.248 5 8.618 5 11.5V16L3 18V19H21V18L19 16V11.5C19 8.618 17.393 6.248 15 5.28V5C15 3.343 13.657 2 12 2Z" fill="#ffd666"/>
-      <path d="M10 20C10 21.1046 10.8954 22 12 22C13.1046 22 14 21.1046 14 20H10Z" fill="#ffd666"/>
+<div class="card muted" id="card">
+  <button class="icon-btn settings-btn" id="settings-button" title="设置" aria-label="设置" aria-expanded="false" aria-controls="settings-panel">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+      <path d="m9.5 3-.5 2-2 1.2-2-.6-2.5 4.3L4 11.4v2.3l-1.5 1.5L5 19.5l2-.6 2 1.2.5 2h5l.5-2 2-1.2 2 .6 2.5-4.3-1.5-1.5v-2.3l1.5-1.5L19 5.6l-2 .6L15 5l-.5-2z"/>
+      <circle cx="12" cy="12.5" r="3.2"/>
     </svg>
-    <span class="title" id="notif-title">Agent Notification</span>
+  </button>
+  <button class="icon-btn close-x" id="x" title="关闭通知" aria-label="关闭通知">&times;</button>
+  <div class="hdr">
+    <svg class="bell" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2C10.343 2 9 3.343 9 5V5.28C6.607 6.248 5 8.618 5 11.5V16L3 18V19H21V18L19 16V11.5C19 8.618 17.393 6.248 15 5.28V5C15 3.343 13.657 2 12 2Z"/>
+      <path d="M10 20C10 21.1046 10.8954 22 12 22C13.1046 22 14 21.1046 14 20H10Z"/>
+    </svg>
+    <span class="ttl" id="t">通知</span>
   </div>
-  <div class="body">
-    <p class="message" id="notif-message">Loading...</p>
-  </div>
-  <div class="footer">
-    <button class="dismiss-btn" id="dismiss-btn">&#x786E;&#x8BA4;&#x5173;&#x95ED;</button>
+  <div class="body"><p class="msg" id="m">正在加载…</p></div>
+  <section class="settings" id="settings-panel" aria-labelledby="settings-title" hidden>
+    <h2 id="settings-title">通知设置</h2>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label" id="sound-label">当前卡片声音</div>
+        <p class="setting-hint">立即开启或停止这张卡片的蜂鸣</p>
+      </div>
+      <button class="switch" id="sound-toggle" role="switch" aria-checked="false" aria-labelledby="sound-label" disabled></button>
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label" id="default-sound-label">新通知默认声音</div>
+        <p class="setting-hint">自动保存，下次启动也会记住</p>
+      </div>
+      <button class="switch" id="default-sound-toggle" role="switch" aria-checked="true" aria-labelledby="default-sound-label" disabled></button>
+    </div>
+    <p class="settings-status" id="settings-status" role="status" aria-live="polite"></p>
+  </section>
+  <div class="ftr">
+    <span class="sound-status"><span class="dot" aria-hidden="true"></span><span id="sound-status" aria-live="polite">声音已关闭</span></span>
+    <button class="btn" id="b">确认关闭</button>
   </div>
 </div>
-
 <script>
-  // ─── Beeping sound using Web Audio API ───
+  const card = document.getElementById('card');
+  const settingsButton = document.getElementById('settings-button');
+  const settingsPanel = document.getElementById('settings-panel');
+  const soundToggle = document.getElementById('sound-toggle');
+  const defaultSoundToggle = document.getElementById('default-sound-toggle');
+  const settingsStatus = document.getElementById('settings-status');
   let audioCtx = null;
   let beepInterval = null;
   let isDismissing = false;
+  let soundEnabled = false;
+  let defaultSoundEnabled = true;
+
+  function reportHeight() {
+    if (!isDismissing) window.ccNotify.reportHeight(Math.ceil(card.getBoundingClientRect().height) + 20);
+  }
+
+  function setSettingsStatus(message, isError = false) {
+    settingsStatus.textContent = message;
+    settingsStatus.classList.toggle('error', isError);
+  }
 
   function startBeeping() {
+    if (beepInterval !== null || isDismissing) return;
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    } catch (e) {
-      console.error('AudioContext failed:', e);
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    } catch {
+      audioCtx = null;
+      soundEnabled = false;
+      setSettingsStatus('无法播放声音，请重新打开开关。', true);
       return;
     }
-
     function beep() {
-      if (!audioCtx || audioCtx.state === 'closed') return;
+      if (!audioCtx || audioCtx.state === 'closed' || !soundEnabled) return;
       try {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-
         osc.type = 'square';
         osc.frequency.value = 1200;
-
-        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
-
+        gain.gain.setValueAtTime(.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(.01, audioCtx.currentTime + .12);
         osc.start(audioCtx.currentTime);
-        osc.stop(audioCtx.currentTime + 0.12);
-      } catch (e) {
-        // Ignore errors from closing context
+        osc.stop(audioCtx.currentTime + .12);
+      } catch {
+        // A notification may be closing while a beep is in flight.
       }
     }
-
     beep();
     beepInterval = setInterval(beep, 600);
   }
 
   function stopBeeping() {
-    // 1. Stop the interval FIRST (instant, no lag)
-    if (beepInterval) {
+    if (beepInterval !== null) {
       clearInterval(beepInterval);
       beepInterval = null;
     }
-    // 2. Close audio context in background (don't await)
     if (audioCtx) {
       const ctx = audioCtx;
-      audioCtx = null; // Prevent further beeps immediately
-      ctx.close().catch(() => {}); // Fire and forget
+      audioCtx = null;
+      ctx.close().catch(() => {});
     }
   }
 
-  // ─── Receive notification data from main process ───
-  window.ccNotify.onShowNotification(({ title, message }) => {
-    document.getElementById('notif-title').textContent = title;
-    document.getElementById('notif-message').textContent = message;
-    isDismissing = false;
-    startBeeping();
-  });
+  function setCurrentSound(enabled) {
+    soundEnabled = enabled && !isDismissing;
+    if (soundEnabled) startBeeping();
+    else stopBeeping();
+    soundToggle.setAttribute('aria-checked', String(soundEnabled));
+    card.classList.toggle('muted', !soundEnabled);
+    document.getElementById('sound-status').textContent = soundEnabled ? '声音已开启' : '声音已关闭';
+  }
 
-  // ─── Dismiss: instant stop + close ───
-  document.getElementById('dismiss-btn').addEventListener('click', () => {
-    if (isDismissing) return; // Prevent double-click
+  function showSettings(open) {
+    settingsPanel.hidden = !open;
+    settingsButton.setAttribute('aria-expanded', String(open));
+    if (open) soundToggle.focus();
+    reportHeight();
+  }
+
+  function updateDefaultSound(enabled) {
+    defaultSoundEnabled = enabled;
+    defaultSoundToggle.setAttribute('aria-checked', String(enabled));
+  }
+
+  function dismiss() {
+    if (isDismissing) return;
     isDismissing = true;
-
-    // 1. Stop sound immediately
-    stopBeeping();
-
-    // 2. Add slide-out animation
-    const card = document.getElementById('card');
+    setCurrentSound(false);
     card.classList.add('dismissing');
+    setTimeout(() => window.ccNotify.dismiss(), 150);
+  }
 
-    // 3. Tell main process to close window after short animation
-    setTimeout(() => {
-      window.ccNotify.dismiss();
-    }, 150);
+  window.ccNotify.onShowNotification((data) => {
+    stopBeeping();
+    document.getElementById('t').textContent = data.title;
+    document.getElementById('m').textContent = data.message;
+    isDismissing = false;
+    soundToggle.disabled = false;
+    defaultSoundToggle.disabled = false;
+    updateDefaultSound(data.defaultSoundEnabled !== false);
+    setCurrentSound(data.soundEnabled !== false && data.silent !== true);
+    reportHeight();
   });
+  window.ccNotify.onSettingsChanged((settings) => {
+    updateDefaultSound(settings.soundEnabled);
+  });
+  settingsButton.addEventListener('click', () => showSettings(settingsPanel.hidden));
+  soundToggle.addEventListener('click', () => setCurrentSound(!soundEnabled));
+  defaultSoundToggle.addEventListener('click', async () => {
+    const next = !defaultSoundEnabled;
+    defaultSoundToggle.disabled = true;
+    setSettingsStatus('正在保存…');
+    try {
+      const result = await window.ccNotify.setDefaultSoundEnabled(next);
+      if (!result.success) throw new Error(result.error || '声音设置保存失败，请重试。');
+      updateDefaultSound(result.settings.soundEnabled);
+      setSettingsStatus(next ? '已保存，新通知默认开启声音。' : '已保存，新通知默认静音。');
+    } catch (error) {
+      setSettingsStatus(error.message || '声音设置保存失败，请重试。', true);
+    } finally {
+      defaultSoundToggle.disabled = false;
+      reportHeight();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !settingsPanel.hidden) {
+      showSettings(false);
+      settingsButton.focus();
+    }
+  });
+  document.addEventListener('click', (event) => {
+    if (!settingsPanel.hidden && !settingsPanel.contains(event.target) && !settingsButton.contains(event.target)) {
+      showSettings(false);
+    }
+  });
+  document.getElementById('b').addEventListener('click', dismiss);
+  document.getElementById('x').addEventListener('click', dismiss);
+  window.addEventListener('beforeunload', stopBeeping);
+  new ResizeObserver(reportHeight).observe(card);
 </script>
-
 </body>
 </html>

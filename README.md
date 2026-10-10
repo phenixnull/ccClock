@@ -2,6 +2,15 @@
 
 `ccClock` 是给本机 Agent 用的 Windows 桌面通知器。它会弹出 Electron 通知窗口，并持续蜂鸣，直到用户手动关闭；同时支持一次性提醒和周期提醒。
 
+## 卡片声音设置
+
+每张通知卡片右上角都有齿轮「设置」按钮：
+
+- **当前卡片声音**：关闭后立即停止这张卡片的蜂鸣，卡片仍保留；重新开启会恢复蜂鸣。其他卡片的声音不受影响。
+- **新通知默认声音**：控制之后弹出的即时通知、一次性提醒和周期提醒，自动保存到本机 `settings.json`，重启服务后仍然生效。修改默认值不会改变已显示卡片的声音。
+
+没有保存过设置时，默认开启声音。请求中的 `"silent": true` 会让该张卡片以静音状态打开，即使默认声音开启，也可以在卡片设置中手动打开。
+
 ## 安装
 
 在本项目目录运行：
@@ -83,7 +92,7 @@ node .\send-notify.js --list --json
 node .\send-notify.js --delete <id>
 ```
 
-提醒数据保存在 `schedules.json`。本地 Codex skill 会把临时 payload 写到 `.cc-notify-payload.json`；这两个运行时文件都会被 Git 忽略。
+提醒数据保存在 `schedules.json`，默认声音设置保存在 `settings.json`。本地 Codex skill 会把临时 payload 写到 `.cc-notify-payload.json`；这些运行时文件都会被 Git 忽略。
 
 ## HTTP API
 

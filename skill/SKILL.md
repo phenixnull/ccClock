@@ -163,7 +163,9 @@ Deletion flow:
 
 ## Service behavior
 
-- The notifier keeps beeping until the user dismisses it (unless `silent: true`).
+- Each card has a Settings button: Current card sound can stop or resume its buzzer without dismissing it.
+- New notification default sound is saved locally in `settings.json` and applies to future instant and scheduled reminders across service restarts.
+- The notifier keeps beeping until the user dismisses it or turns off its sound (unless `silent: true` or the saved default is muted).
 - Multiple notifications can stack on screen at the same time (up to six active windows).
 - `send-notify.js` auto-launches the Electron service if needed (health check on `127.0.0.1:17329`).
 - Scheduled reminders persist across restarts in `<project-dir>/schedules.json`.

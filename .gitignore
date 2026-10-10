@@ -2,3 +2,6 @@ node_modules/
 _msg.json
 .cc-notify-payload*.json
 schedules.json
+settings.json
+settings.json.tmp
+output/playwright/
