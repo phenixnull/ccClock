@@ -13,9 +13,11 @@
 
 ## 前台卡片与后台排队
 
-前台最多同时显示 **7 张**通知卡片。最早收到的在最下面，较新的依次向上排列。
+前台数量由**主屏幕可用空间和每张卡片的实际高度**决定，不设固定张数。计算会留出屏幕边距和卡片间距，避开任务栏；长消息会在卡片内部滚动。最早收到的在最下面，较新的依次向上排列。
 
-当前台已满时，新通知按收到的顺序进入后台等待，不会挤掉已有卡片，也不会在后台播放蜂鸣。用户确认关闭一张后，上方卡片依次向下移动，后台最早等待的一张补到最上面。
+下一张卡片放不下时，新通知按收到的顺序进入后台等待，不会挤掉已有卡片，也不会在后台播放蜂鸣。用户确认关闭一张后，上方卡片依次向下移动，后台从最早等待的一张开始补到最上面，直到剩余空间放不下下一张。较小的后续通知也不会插队。
+
+设置展开或收起、屏幕分辨率或缩放变化、任务栏改变可用空间时，都会重新计算。已有卡片因空间缩小而放不下时，较新的卡片暂时返回队列并停止蜂鸣，排在原有后台通知之前；空间恢复后按原顺序继续显示。
 
 即时通知、定时提醒和周期提醒共用这条队列。未确认的前台通知和后台通知保存到本机 `notifications.json`，重启服务后会继续按原顺序显示和排队。
 
@@ -115,7 +117,7 @@ node .\send-notify.js --delete <id>
 - `POST /schedule/delete`
 - `POST /dismiss`
 
-`GET /health` 中，`windows` 是前台卡片数，`queuedNotifications` 是后台等待数，`notifications` 是全部未确认通知数；`pending` 和 `completed` 仍表示定时提醒任务数。`GET /notifications` 返回 `active` 和 `queued` 两个按收到顺序排列的列表。`POST /notify` 返回通知 `id` 和是否进入后台的 `queued`；`POST /dismiss` 会清空前台和后台通知。
+`GET /health` 中，`capacityMode` 为 `screen-space`，`workArea` 是主屏幕可用区域，`availableHeight` 是扣除边距后的可用高度，`usedHeight` 是前台卡片和间距占用的高度。`windows` 是前台卡片数，`queuedNotifications` 是后台等待数，`notifications` 是全部未确认通知数；`pending` 和 `completed` 仍表示定时提醒任务数。`GET /notifications` 返回 `active` 和 `queued` 两个按收到顺序排列的列表。`POST /notify` 返回通知 `id` 和响应时是否在后台等待的 `queued`；`POST /dismiss` 会清空前台和后台通知。
 
 示例：
 

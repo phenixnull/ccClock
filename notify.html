@@ -19,9 +19,9 @@
   button:focus-visible { outline: 2px solid var(--ttl); outline-offset: 3px; }
   button:disabled { cursor: wait; opacity: .6; }
   .card {
-    width: 400px;
+    width: calc(100% - 20px);
     min-height: 140px;
-    max-height: 480px;
+    max-height: var(--card-max-height, 480px);
     margin: 10px;
     display: flex;
     flex-direction: column;
@@ -31,8 +31,8 @@
     border: 1.5px solid var(--border);
     border-radius: 14px;
     box-shadow: 0 8px 32px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
-    animation: slideIn .35s cubic-bezier(.16,1,.3,1);
   }
+  .card.entering { animation: slideIn .35s cubic-bezier(.16,1,.3,1); }
   @keyframes slideIn {
     from { transform: translateX(120%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
@@ -72,7 +72,7 @@
   .close-x { right: 12px; font-size: 20px; }
   .close-x:hover { background: rgba(255,80,80,.6); }
   .settings {
-    flex-shrink: 0; margin: 0 14px 8px; padding: 12px;
+    flex-shrink: 1; min-height: 0; overflow-y: auto; margin: 0 14px 8px; padding: 12px;
     background: rgba(0,0,0,.2); border: 1px solid rgba(255,255,255,.12); border-radius: 10px;
     color: #e0e8f0;
   }
@@ -156,11 +156,21 @@
   let audioCtx = null;
   let beepInterval = null;
   let isDismissing = false;
+  let isForeground = false;
+  let hasNotification = false;
+  let layoutRevision = 0;
   let soundEnabled = false;
   let defaultSoundEnabled = true;
 
   function reportHeight() {
-    if (!isDismissing) window.ccNotify.reportHeight(Math.ceil(card.getBoundingClientRect().height) + 20);
+    if (hasNotification && !isDismissing) {
+      window.ccNotify.reportHeight(Math.ceil(card.getBoundingClientRect().height) + 20, layoutRevision);
+    }
+  }
+
+  function applyLayout(constraints) {
+    layoutRevision = constraints.revision;
+    document.documentElement.style.setProperty('--card-max-height', constraints.maxCardHeight + 'px');
   }
 
   function setSettingsStatus(message, isError = false) {
@@ -169,7 +179,7 @@
   }
 
   function startBeeping() {
-    if (beepInterval !== null || isDismissing) return;
+    if (beepInterval !== null || isDismissing || !isForeground) return;
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
@@ -214,7 +224,7 @@
 
   function setCurrentSound(enabled) {
     soundEnabled = enabled && !isDismissing;
-    if (soundEnabled) startBeeping();
+    if (soundEnabled && isForeground) startBeeping();
     else stopBeeping();
     soundToggle.setAttribute('aria-checked', String(soundEnabled));
     card.classList.toggle('muted', !soundEnabled);
@@ -246,6 +256,9 @@
     document.getElementById('t').textContent = data.title;
     document.getElementById('m').textContent = data.message;
     isDismissing = false;
+    isForeground = false;
+    hasNotification = true;
+    applyLayout(data);
     soundToggle.disabled = false;
     defaultSoundToggle.disabled = false;
     updateDefaultSound(data.defaultSoundEnabled !== false);
@@ -254,6 +267,16 @@
   });
   window.ccNotify.onSettingsChanged((settings) => {
     updateDefaultSound(settings.soundEnabled);
+  });
+  window.ccNotify.onLayoutChanged((constraints) => {
+    applyLayout(constraints);
+    reportHeight();
+  });
+  window.ccNotify.onNotificationVisibility((state) => {
+    isForeground = state.active;
+    card.classList.toggle('entering', isForeground);
+    if (typeof state.defaultSoundEnabled === 'boolean') updateDefaultSound(state.defaultSoundEnabled);
+    setCurrentSound(typeof state.soundEnabled === 'boolean' ? state.soundEnabled : soundEnabled);
   });
   settingsButton.addEventListener('click', () => showSettings(settingsPanel.hidden));
   soundToggle.addEventListener('click', () => setCurrentSound(!soundEnabled));

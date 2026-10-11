@@ -4,10 +4,14 @@ const http = require('http');
 const fs = require('fs');
 const crypto = require('crypto');
 const { createNotificationSettings } = require('./notification-settings');
+const { createNotificationQueue } = require('./notification-queue');
 const {
-  DEFAULT_MAX_ACTIVE_WINDOWS,
-  createNotificationQueue,
-} = require('./notification-queue');
+  MIN_WINDOW_HEIGHT,
+  MAX_WINDOW_HEIGHT,
+  getNotificationSpace,
+  getStackHeight,
+  getNotificationLayout,
+} = require('./notification-layout');
 const {
   createRecurringSchedule,
   createSingleSchedule,
@@ -17,8 +21,13 @@ const {
 
 // ─── State ───
 const notificationQueue = createNotificationQueue({
-  maxActive: DEFAULT_MAX_ACTIVE_WINDOWS,
+  canKeep: entries => getNotificationLayout(entries, workArea) !== null,
+  canActivate: (entry, entries) => !isQuitting && entry.ready
+    && entries.every(active => active.ready)
+    && getNotificationLayout([...entries, entry], workArea) !== null,
+  onPrepare: prepareNotificationWindow,
   onActivate: showNotificationWindow,
+  onDeactivate: hideNotificationWindow,
   onChange: saveNotifications,
 });
 const activeWindows = notificationQueue.entries(); // [{ id, win, height, colorIndex }]
@@ -31,9 +40,8 @@ const PORT = 17329;
 const SCHEDULES_FILE = path.join(__dirname, 'schedules.json');
 const NOTIFICATIONS_FILE = path.join(__dirname, 'notifications.json');
 const notificationSettings = createNotificationSettings(path.join(__dirname, 'settings.json'));
-const W = 420;
-const M = 20;
-const GAP = 12;
+let workArea = null;
+let layoutRevision = 0;
 let colorCounter = 0;
 
 // ─── Color Themes (6 distinct gradients) ───
@@ -130,11 +138,12 @@ function generateHTML(t) {
 }
 // ─── Window positioning ───
 function removeDestroyedWindows() {
-  // Waiting entries intentionally have no BrowserWindow.
+  // Only the head of the waiting queue needs a hidden window for measurement.
   notificationQueue.removeWhere((entry) => entry.win && entry.win.isDestroyed());
 }
 
 function destroyNotificationWindow(entry) {
+  entry.finishMeasurement?.();
   if (!entry || !entry.win || entry.win.isDestroyed()) {
     return;
   }
@@ -143,17 +152,38 @@ function destroyNotificationWindow(entry) {
 }
 
 function repositionWindows() {
-  removeDestroyedWindows();
-  const display = screen.getPrimaryDisplay();
-  const workArea = display.workArea;
-  let bottomY = workArea.y + workArea.height - M;
-  for (const entry of activeWindows) {
+  const bounds = getNotificationLayout(activeWindows, workArea);
+  if (!bounds) return;
+  activeWindows.forEach((entry, index) => {
+    if (entry.win && !entry.win.isDestroyed()) entry.win.setBounds(bounds[index]);
+  });
+}
+
+function layoutConstraints() {
+  const space = getNotificationSpace(workArea);
+  return {
+    revision: layoutRevision,
+    maxCardHeight: Math.max(140, Math.min(MAX_WINDOW_HEIGHT, space.height) - 20),
+  };
+}
+
+function updateDisplayLayout() {
+  workArea = { ...screen.getPrimaryDisplay().workArea };
+  layoutRevision++;
+  const space = getNotificationSpace(workArea);
+  for (const entry of [...activeWindows, ...notificationQueue.waitingEntries()]) {
     if (!entry.win || entry.win.isDestroyed()) continue;
-    const h = entry.height || 200;
-    const y = bottomY - h;
-    entry.win.setBounds({ x: workArea.x + workArea.width - W - M, y, width: W, height: h });
-    bottomY = y - GAP;
+    entry.ready = false;
+    entry.win.setSize(Math.max(21, space.width), entry.win.getBounds().height);
+    if (entry.loaded) entry.win.webContents.send('layout-changed', layoutConstraints());
   }
+  if (notificationQueue.totalSize() > 0) notificationQueue.refresh();
+  repositionWindows();
+}
+
+function findNotification(sender) {
+  return [...activeWindows, ...notificationQueue.waitingEntries()]
+    .find(entry => entry.win && !entry.win.isDestroyed() && entry.win.webContents === sender);
 }
 
 // ─── Create notification window ───
@@ -169,36 +199,37 @@ function createNotificationWindow(title, message, options = {}) {
     message,
     silent: options.silent === true,
     colorIndex: ci,
+    ready: false,
   };
   notificationQueue.add(entry);
   return entry;
 }
 
-// Only foreground notifications allocate a window or start a buzzer.
-function showNotificationWindow(entry) {
-  const display = screen.getPrimaryDisplay();
-  const workArea = display.workArea;
-  const initH = 200;
+// Measure only the FIFO head. It remains hidden and silent until it fits.
+function prepareNotificationWindow(entry) {
+  if (isQuitting || entry.win) return;
+  if (getNotificationLayout([...activeWindows, { height: MIN_WINDOW_HEIGHT }], workArea) === null) return;
+  const space = getNotificationSpace(workArea);
+  const initH = Math.min(MAX_WINDOW_HEIGHT, space.height);
 
   const win = new BrowserWindow({
-    width: W, height: initH,
-    x: workArea.x + workArea.width - W - M,
-    y: workArea.y + workArea.height - initH - M,
+    width: space.width, height: initH,
     frame: false, transparent: true, alwaysOnTop: true,
-    resizable: false, skipTaskbar: false, focusable: true, show: false,
+    resizable: false, skipTaskbar: true, focusable: true, show: false,
     icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
 
   entry.win = win;
-  entry.height = initH;
-  repositionWindows();
+  entry.measurement = new Promise(resolve => { entry.finishMeasurement = resolve; });
 
   win.webContents.once('did-finish-load', () => {
     if (isQuitting || win.isDestroyed()) return;
+    entry.loaded = true;
     const settings = notificationSettings.get();
     win.webContents.send('show-notification', {
       title: entry.title,
@@ -206,27 +237,54 @@ function showNotificationWindow(entry) {
       silent: entry.silent,
       soundEnabled: settings.soundEnabled && !entry.silent,
       defaultSoundEnabled: settings.soundEnabled,
+      ...layoutConstraints(),
     });
-    win.show();
-    win.setAlwaysOnTop(true, 'screen-saver');
+  });
+
+  win.webContents.on('did-fail-load', (_event, code, description) => {
+    console.error('[cc-notify] Notification UI failed to load:', code, description);
+    entry.finishMeasurement?.();
   });
 
   win.on('closed', () => {
+    entry.finishMeasurement?.();
     if (isQuitting) return;
     notificationQueue.removeById(entry.id);
     repositionWindows();
   });
   win.loadURL('http://127.0.0.1:' + PORT + '/ui?theme=' + entry.colorIndex);
 }
+
+function showNotificationWindow(entry) {
+  const win = entry.win;
+  repositionWindows();
+  const settings = notificationSettings.get();
+  win.webContents.send('notification-visibility', {
+    active: true,
+    defaultSoundEnabled: settings.soundEnabled,
+    ...(!entry.shown ? { soundEnabled: settings.soundEnabled && !entry.silent } : {}),
+  });
+  entry.shown = true;
+  win.setSkipTaskbar(false);
+  win.show();
+  win.setAlwaysOnTop(true, 'screen-saver');
+}
+
+function hideNotificationWindow(entry) {
+  if (!entry.win || entry.win.isDestroyed()) return;
+  entry.win.webContents.send('notification-visibility', { active: false });
+  entry.win.hide();
+  entry.win.setSkipTaskbar(true);
+}
 // ─── IPC ───
 ipcMain.handle('set-default-sound', (event, enabled) => {
-  const entry = activeWindows.find(w => !w.win.isDestroyed() && w.win.webContents === event.sender);
-  if (!entry) return { success: false, error: 'Notification window is no longer active.' };
+  const entry = findNotification(event.sender);
+  if (!entry || !activeWindows.includes(entry)) return { success: false, error: 'Notification window is no longer active.' };
 
   try {
     const settings = notificationSettings.setSoundEnabled(enabled);
-    activeWindows.forEach(({ win }) => {
-      if (!win.isDestroyed()) win.webContents.send('settings-changed', settings);
+    [...activeWindows, ...notificationQueue.waitingEntries()].forEach(({ win }) => {
+      if (win && !win.isDestroyed()) win.webContents.send('settings-changed', settings);
     });
     return { success: true, settings };
   } catch (e) {
@@ -236,15 +294,22 @@ ipcMain.handle('set-default-sound', (event, enabled) => {
 });
 
 ipcMain.on('dismiss', (event) => {
-  const entry = activeWindows.find(w => !w.win.isDestroyed() && w.win.webContents === event.sender);
-  if (entry && !entry.win.isDestroyed()) entry.win.destroy();
+  const entry = findNotification(event.sender);
+  // Honor an acknowledgement even if a screen change hid the card during
+  // the renderer's closing animation.
+  if (entry) entry.win.destroy();
 });
 
-ipcMain.on('report-height', (event, contentHeight) => {
-  const entry = activeWindows.find(w => !w.win.isDestroyed() && w.win.webContents === event.sender);
-  if (!entry) return;
-  entry.height = Math.min(Math.max(contentHeight, 160), 500);
+ipcMain.on('report-height', (event, contentHeight, revision) => {
+  const entry = findNotification(event.sender);
+  if (!entry || revision !== layoutRevision || !Number.isFinite(contentHeight)) return;
+  const height = Math.min(Math.max(Math.ceil(contentHeight), MIN_WINDOW_HEIGHT), MAX_WINDOW_HEIGHT);
+  if (entry.ready && entry.height === height) return;
+  entry.height = height;
+  entry.ready = true;
+  notificationQueue.refresh();
   repositionWindows();
+  entry.finishMeasurement?.();
 });
 
 // ─── HTTP server ───
@@ -273,7 +338,10 @@ function startHttpServer() {
       res.end(JSON.stringify({
         status:'ok',
         service:'cc-notify',
-        maxWindows: DEFAULT_MAX_ACTIVE_WINDOWS,
+        capacityMode: 'screen-space',
+        workArea,
+        availableHeight: getNotificationSpace(workArea).height,
+        usedHeight: getStackHeight(activeWindows),
         windows: activeWindows.length,
         queuedNotifications: notificationQueue.waitingSize(),
         notifications: notificationQueue.totalSize(),
@@ -289,11 +357,19 @@ function startHttpServer() {
     if (req.method === 'POST' && p === '/notify') {
       readBody(req, (data) => {
         const entry = createNotificationWindow(data.title || 'Agent Notification', data.message || 'Task completed.', { silent: data.silent === true });
-        jsonOk(res, {
-          success: true,
-          id: entry.id,
-          queued: notificationQueue.waitingEntries().includes(entry),
+        const respond = () => jsonOk(res, {
+          success: true, id: entry.id, queued: notificationQueue.waitingEntries().includes(entry),
         });
+        // Return the measured admission result for a newly prepared queue head.
+        if (entry.measurement && !entry.ready) {
+          const timeout = setTimeout(respond, 1500);
+          entry.measurement.then(() => {
+            if (!res.writableEnded) {
+              clearTimeout(timeout);
+              respond();
+            }
+          });
+        } else respond();
       }, res); return;
     }
 
@@ -409,6 +485,10 @@ function jsonErr(res, code, msg) {
 
 // ─── App lifecycle ───
 app.whenReady().then(() => {
+  updateDisplayLayout();
+  screen.on('display-metrics-changed', updateDisplayLayout);
+  screen.on('display-added', updateDisplayLayout);
+  screen.on('display-removed', updateDisplayLayout);
   startHttpServer();
   loadNotifications();
   startScheduler();

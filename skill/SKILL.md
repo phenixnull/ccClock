@@ -166,7 +166,8 @@ Deletion flow:
 - Each card has a Settings button: Current card sound can stop or resume its buzzer without dismissing it.
 - New notification default sound is saved locally in `settings.json` and applies to future instant and scheduled reminders across service restarts.
 - The notifier keeps beeping until the user dismisses it or turns off its sound (unless `silent: true` or the saved default is muted).
-- Up to seven notifications stack in the foreground, oldest at the bottom. Later notifications wait in FIFO order without beeping and fill vacancies when a foreground card is dismissed.
+- Foreground capacity follows the primary display's available work area and measured card heights, with no fixed card count. The oldest card stays at the bottom. Notifications that do not fit wait in FIFO order without beeping and fill available space after dismissal or layout changes; smaller later cards never skip the queue head.
+- Screen changes and settings expansion recalculate the stack. Newer cards that no longer fit return to the front of the waiting queue, stop beeping, and resume in order when space returns.
 - Unacknowledged foreground and queued notifications persist across service restarts in `<project-dir>/notifications.json`.
 - `send-notify.js` auto-launches the Electron service if needed (health check on `127.0.0.1:17329`).
 - Scheduled reminders persist across restarts in `<project-dir>/schedules.json`.

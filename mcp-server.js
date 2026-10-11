@@ -174,7 +174,7 @@ function sendNotification(method, params) {
 const TOOLS = [
   {
     name: 'notify',
-    description: 'Show a desktop notification using the saved sound preference. Up to seven cards are visible; additional notifications wait in FIFO order until a card is dismissed.',
+    description: 'Show a desktop notification using the saved sound preference. Cards appear only when they fit in the available screen space; additional notifications wait silently in FIFO order until space becomes available.',
     inputSchema: {
       type: 'object',
       properties: {

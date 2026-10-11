@@ -14,6 +14,8 @@ function createCard(options = {}) {
   const contexts = [];
   const timeouts = [];
   const heights = [];
+  const revisions = [];
+  const style = {};
   const saved = [];
   let dismissed = 0;
 
@@ -62,18 +64,24 @@ function createCard(options = {}) {
   const bridge = {
     onShowNotification(callback) { callbacks.show = callback; },
     onSettingsChanged(callback) { callbacks.settings = callback; },
+    onLayoutChanged(callback) { callbacks.layout = callback; },
+    onNotificationVisibility(callback) { callbacks.visibility = callback; },
     async setDefaultSoundEnabled(enabled) {
       saved.push(enabled);
       return options.saveFailure
         ? { success: false, error: 'Save failed' }
         : { success: true, settings: { soundEnabled: enabled } };
     },
-    reportHeight(height) { heights.push(height); },
+    reportHeight(height, revision) { heights.push(height); revisions.push(revision); },
     dismiss() { dismissed++; },
   };
 
   vm.runInNewContext(script, {
-    document: { getElementById: element, addEventListener(name, callback) { callbacks[name] = callback; } },
+    document: {
+      getElementById: element,
+      documentElement: { style: { setProperty(name, value) { style[name] = value; } } },
+      addEventListener(name, callback) { callbacks[name] = callback; },
+    },
     window: { ccNotify: bridge, AudioContext, addEventListener(name, callback) { callbacks[name] = callback; } },
     ResizeObserver: class { constructor(callback) { this.callback = callback; } observe() { this.callback(); } },
     setInterval(callback) { const id = Symbol(); intervals.set(id, callback); return id; },
@@ -82,8 +90,14 @@ function createCard(options = {}) {
   });
 
   return {
-    elements, callbacks, intervals, contexts, heights, saved,
-    show(data = {}) { callbacks.show({ title: 'Task', message: 'Done', ...data }); },
+    elements, callbacks, intervals, contexts, heights, revisions, style, saved,
+    prepare(data = {}) {
+      callbacks.show({ title: 'Task', message: 'Done', revision: 1, maxCardHeight: 480, ...data });
+    },
+    show(data = {}) {
+      this.prepare(data);
+      callbacks.visibility({ active: true });
+    },
     flushTimeouts() { timeouts.splice(0).forEach(callback => callback()); },
     dismissed() { return dismissed; },
   };
@@ -172,4 +186,40 @@ test('audio failure leaves the switch visibly off without scheduling beeps', () 
   assert.equal(card.intervals.size, 0);
   assert.equal(card.elements['sound-toggle'].attributes['aria-checked'], 'false');
   assert.equal(card.elements['settings-status'].classList.contains('error'), true);
+});
+
+test('background measurement reports actual height but never creates a buzzer', () => {
+  const card = createCard();
+  assert.deepEqual(card.heights, []);
+  card.prepare({ soundEnabled: true });
+  assert.equal(card.heights.at(-1), 160);
+  assert.equal(card.revisions.at(-1), 1);
+  assert.equal(card.contexts.length, 0);
+  assert.equal(card.intervals.size, 0);
+  card.callbacks.visibility({ active: true, soundEnabled: false, defaultSoundEnabled: false });
+  assert.equal(card.contexts.length, 0);
+  assert.equal(card.elements['sound-toggle'].attributes['aria-checked'], 'false');
+});
+
+test('returning a card to the queue stops audio and resuming preserves its sound choice', () => {
+  const card = createCard();
+  card.show();
+  card.callbacks.visibility({ active: false });
+  assert.equal(card.intervals.size, 0);
+  assert.equal(card.contexts[0].state, 'closed');
+  card.callbacks.visibility({ active: true });
+  assert.equal(card.intervals.size, 1);
+  card.elements['sound-toggle'].click();
+  card.callbacks.visibility({ active: false });
+  card.callbacks.visibility({ active: true });
+  assert.equal(card.intervals.size, 0);
+});
+
+test('display changes update the maximum height and tag the new measurement revision', () => {
+  const card = createCard();
+  card.prepare();
+  card.callbacks.layout({ revision: 2, maxCardHeight: 280 });
+  assert.equal(card.style['--card-max-height'], '280px');
+  assert.equal(card.revisions.at(-1), 2);
+  assert.equal(card.intervals.size, 0);
 });

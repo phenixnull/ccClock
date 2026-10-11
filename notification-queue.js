@@ -1,10 +1,9 @@
-const DEFAULT_MAX_ACTIVE_WINDOWS = 7;
-
 function createNotificationQueue(options = {}) {
-  const maxActive = Number.isInteger(options.maxActive) && options.maxActive > 0
-    ? options.maxActive
-    : DEFAULT_MAX_ACTIVE_WINDOWS;
+  const canActivate = typeof options.canActivate === 'function' ? options.canActivate : () => true;
+  const canKeep = typeof options.canKeep === 'function' ? options.canKeep : () => true;
+  const onPrepare = typeof options.onPrepare === 'function' ? options.onPrepare : () => {};
   const onActivate = typeof options.onActivate === 'function' ? options.onActivate : () => {};
+  const onDeactivate = typeof options.onDeactivate === 'function' ? options.onDeactivate : () => {};
   const onChange = typeof options.onChange === 'function' ? options.onChange : () => {};
   const entries = [];
   const waiting = [];
@@ -14,7 +13,19 @@ function createNotificationQueue(options = {}) {
     if (filling) return;
     filling = true;
     try {
-      while (entries.length < maxActive && waiting.length > 0) {
+      // Resizing a card or shrinking a display may put newer cards back in line.
+      // They stay ahead of all notifications that arrived after them.
+      let keep = entries.length;
+      while (keep > 0 && !canKeep(entries.slice(0, keep))) keep--;
+      const overflow = entries.splice(keep);
+      waiting.unshift(...overflow);
+      overflow.forEach(onDeactivate);
+
+      while (waiting.length > 0) {
+        const next = waiting[0];
+        onPrepare(next);
+        // Never skip a large or still-unmeasured head to show a later card.
+        if (!canActivate(next, entries)) break;
         const entry = waiting.shift();
         entries.push(entry);
         try {
@@ -33,13 +44,17 @@ function createNotificationQueue(options = {}) {
     }
   }
 
-  function add(entry) {
-    waiting.push(entry);
+  function refresh() {
     try {
       fillSlots();
     } finally {
       onChange();
     }
+  }
+
+  function add(entry) {
+    waiting.push(entry);
+    refresh();
     return entry;
   }
 
@@ -48,11 +63,7 @@ function createNotificationQueue(options = {}) {
       const index = list.findIndex((entry) => entry.id === id);
       if (index !== -1) {
         const removed = list.splice(index, 1)[0];
-        try {
-          fillSlots();
-        } finally {
-          onChange();
-        }
+        refresh();
         return removed;
       }
     }
@@ -70,11 +81,7 @@ function createNotificationQueue(options = {}) {
       }
     }
     if (removed > 0) {
-      try {
-        fillSlots();
-      } finally {
-        onChange();
-      }
+      refresh();
     }
     return removed;
   }
@@ -88,6 +95,7 @@ function createNotificationQueue(options = {}) {
 
   return {
     add,
+    refresh,
     entries() {
       return entries;
     },
@@ -116,6 +124,5 @@ function createNotificationQueue(options = {}) {
 }
 
 module.exports = {
-  DEFAULT_MAX_ACTIVE_WINDOWS,
   createNotificationQueue,
 };
