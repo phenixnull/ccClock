@@ -11,6 +11,14 @@
 
 没有保存过设置时，默认开启声音。请求中的 `"silent": true` 会让该张卡片以静音状态打开，即使默认声音开启，也可以在卡片设置中手动打开。
 
+## 前台卡片与后台排队
+
+前台最多同时显示 **7 张**通知卡片。最早收到的在最下面，较新的依次向上排列。
+
+当前台已满时，新通知按收到的顺序进入后台等待，不会挤掉已有卡片，也不会在后台播放蜂鸣。用户确认关闭一张后，上方卡片依次向下移动，后台最早等待的一张补到最上面。
+
+即时通知、定时提醒和周期提醒共用这条队列。未确认的前台通知和后台通知保存到本机 `notifications.json`，重启服务后会继续按原顺序显示和排队。
+
 ## 安装
 
 在本项目目录运行：
@@ -92,19 +100,22 @@ node .\send-notify.js --list --json
 node .\send-notify.js --delete <id>
 ```
 
-提醒数据保存在 `schedules.json`，默认声音设置保存在 `settings.json`。本地 Codex skill 会把临时 payload 写到 `.cc-notify-payload.json`；这些运行时文件都会被 Git 忽略。
+提醒数据保存在 `schedules.json`，未确认通知保存在 `notifications.json`，默认声音设置保存在 `settings.json`。本地 Codex skill 会把临时 payload 写到 `.cc-notify-payload.json`；这些运行时文件都会被 Git 忽略。
 
 ## HTTP API
 
 服务监听 `127.0.0.1:17329`。
 
 - `GET /health`
+- `GET /notifications`
 - `POST /notify`
 - `POST /schedule`
 - `POST /schedule/recurring`
 - `GET /schedules`
 - `POST /schedule/delete`
 - `POST /dismiss`
+
+`GET /health` 中，`windows` 是前台卡片数，`queuedNotifications` 是后台等待数，`notifications` 是全部未确认通知数；`pending` 和 `completed` 仍表示定时提醒任务数。`GET /notifications` 返回 `active` 和 `queued` 两个按收到顺序排列的列表。`POST /notify` 返回通知 `id` 和是否进入后台的 `queued`；`POST /dismiss` 会清空前台和后台通知。
 
 示例：
 

@@ -18,16 +18,18 @@ const {
 // ─── State ───
 const notificationQueue = createNotificationQueue({
   maxActive: DEFAULT_MAX_ACTIVE_WINDOWS,
-  onEvict(entry) {
-    destroyNotificationWindow(entry);
-  },
+  onActivate: showNotificationWindow,
+  onChange: saveNotifications,
 });
 const activeWindows = notificationQueue.entries(); // [{ id, win, height, colorIndex }]
+let restoringNotifications = false;
+let isQuitting = false;
 let httpServer = null;
 let scheduleStore = { pending: [], completed: [] };
 let schedulerTimer = null;
 const PORT = 17329;
 const SCHEDULES_FILE = path.join(__dirname, 'schedules.json');
+const NOTIFICATIONS_FILE = path.join(__dirname, 'notifications.json');
 const notificationSettings = createNotificationSettings(path.join(__dirname, 'settings.json'));
 const W = 420;
 const M = 20;
@@ -43,6 +45,55 @@ const THEMES = [
   { bg:'linear-gradient(135deg,#2e1a28 0%,#4a1640 50%,#601460 100%)',border:'rgba(255,100,200,.4)',p1:'#ec4899',p2:'#a855f7',ttl:'#f9a8d4',btn:'linear-gradient(135deg,#ec4899 0%,#db2777 100%)',btnH:'linear-gradient(135deg,#f472b6 0%,#ec4899 100%)',dot:'#a855f7',bellFill:'#f9a8d4' },
   { bg:'linear-gradient(135deg,#1a2a2e 0%,#163e42 50%,#0f5460 100%)',border:'rgba(100,230,255,.4)',p1:'#06b6d4',p2:'#22c55e',ttl:'#67e8f9',btn:'linear-gradient(135deg,#06b6d4 0%,#0891b2 100%)',btnH:'linear-gradient(135deg,#22d3ee 0%,#06b6d4 100%)',dot:'#22c55e',bellFill:'#67e8f9' },
 ];
+
+// ─── Unacknowledged notifications ───
+function notificationData(entry) {
+  return {
+    id: entry.id,
+    title: entry.title,
+    message: entry.message,
+    silent: entry.silent,
+    colorIndex: entry.colorIndex,
+  };
+}
+
+function saveNotifications() {
+  if (restoringNotifications) return;
+  try {
+    const notifications = [
+      ...activeWindows,
+      ...notificationQueue.waitingEntries(),
+    ].map(notificationData);
+    fs.writeFileSync(NOTIFICATIONS_FILE + '.tmp', JSON.stringify(notifications, null, 2), 'utf8');
+    fs.renameSync(NOTIFICATIONS_FILE + '.tmp', NOTIFICATIONS_FILE);
+  } catch (e) {
+    console.error('[cc-notify] Save notifications error:', e.message);
+  }
+}
+
+function loadNotifications() {
+  let saved;
+  try {
+    if (!fs.existsSync(NOTIFICATIONS_FILE)) return;
+    saved = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf8'));
+    if (!Array.isArray(saved)) throw new Error('Expected a notification array');
+  } catch (e) {
+    console.error('[cc-notify] Load notifications error:', e.message);
+    return;
+  }
+
+  restoringNotifications = true;
+  try {
+    for (const data of saved) {
+      if (typeof data?.title === 'string' && typeof data.message === 'string') {
+        createNotificationWindow(data.title, data.message, data);
+      }
+    }
+  } finally {
+    restoringNotifications = false;
+    saveNotifications();
+  }
+}
 
 // ─── Schedules Persistence ───
 function loadSchedules() {
@@ -79,7 +130,8 @@ function generateHTML(t) {
 }
 // ─── Window positioning ───
 function removeDestroyedWindows() {
-  notificationQueue.removeWhere((entry) => !entry || !entry.win || entry.win.isDestroyed());
+  // Waiting entries intentionally have no BrowserWindow.
+  notificationQueue.removeWhere((entry) => entry.win && entry.win.isDestroyed());
 }
 
 function destroyNotificationWindow(entry) {
@@ -96,7 +148,7 @@ function repositionWindows() {
   const workArea = display.workArea;
   let bottomY = workArea.y + workArea.height - M;
   for (const entry of activeWindows) {
-    if (entry.win.isDestroyed()) continue;
+    if (!entry.win || entry.win.isDestroyed()) continue;
     const h = entry.height || 200;
     const y = bottomY - h;
     entry.win.setBounds({ x: workArea.x + workArea.width - W - M, y, width: W, height: h });
@@ -107,8 +159,23 @@ function repositionWindows() {
 // ─── Create notification window ───
 function createNotificationWindow(title, message, options = {}) {
   removeDestroyedWindows();
-  const ci = colorCounter % THEMES.length;
+  const ci = Number.isInteger(options.colorIndex) && options.colorIndex >= 0 && options.colorIndex < THEMES.length
+    ? options.colorIndex
+    : colorCounter % THEMES.length;
   colorCounter++;
+  const entry = {
+    id: typeof options.id === 'string' ? options.id : crypto.randomUUID(),
+    title,
+    message,
+    silent: options.silent === true,
+    colorIndex: ci,
+  };
+  notificationQueue.add(entry);
+  return entry;
+}
+
+// Only foreground notifications allocate a window or start a buzzer.
+function showNotificationWindow(entry) {
   const display = screen.getPrimaryDisplay();
   const workArea = display.workArea;
   const initH = 200;
@@ -126,19 +193,18 @@ function createNotificationWindow(title, message, options = {}) {
     },
   });
 
-  const id = crypto.randomUUID();
-  const entry = { id, win, height: initH, colorIndex: ci };
-  notificationQueue.add(entry);
+  entry.win = win;
+  entry.height = initH;
   repositionWindows();
 
-  const pending = { title, message, silent: options.silent === true };
-  win.loadURL('http://127.0.0.1:' + PORT + '/ui?theme=' + ci);
-
   win.webContents.once('did-finish-load', () => {
+    if (isQuitting || win.isDestroyed()) return;
     const settings = notificationSettings.get();
     win.webContents.send('show-notification', {
-      ...pending,
-      soundEnabled: settings.soundEnabled && !pending.silent,
+      title: entry.title,
+      message: entry.message,
+      silent: entry.silent,
+      soundEnabled: settings.soundEnabled && !entry.silent,
       defaultSoundEnabled: settings.soundEnabled,
     });
     win.show();
@@ -146,9 +212,11 @@ function createNotificationWindow(title, message, options = {}) {
   });
 
   win.on('closed', () => {
-    notificationQueue.removeById(id);
+    if (isQuitting) return;
+    notificationQueue.removeById(entry.id);
     repositionWindows();
   });
+  win.loadURL('http://127.0.0.1:' + PORT + '/ui?theme=' + entry.colorIndex);
 }
 // ─── IPC ───
 ipcMain.handle('set-default-sound', (event, enabled) => {
@@ -207,6 +275,8 @@ function startHttpServer() {
         service:'cc-notify',
         maxWindows: DEFAULT_MAX_ACTIVE_WINDOWS,
         windows: activeWindows.length,
+        queuedNotifications: notificationQueue.waitingSize(),
+        notifications: notificationQueue.totalSize(),
         schedules: scheduleStore.pending.length,
         pending: scheduleStore.pending.length,
         completed: scheduleStore.completed.length,
@@ -218,9 +288,22 @@ function startHttpServer() {
     // Instant notification
     if (req.method === 'POST' && p === '/notify') {
       readBody(req, (data) => {
-        createNotificationWindow(data.title || 'Agent Notification', data.message || 'Task completed.', { silent: data.silent === true });
-        jsonOk(res, { success:true });
+        const entry = createNotificationWindow(data.title || 'Agent Notification', data.message || 'Task completed.', { silent: data.silent === true });
+        jsonOk(res, {
+          success: true,
+          id: entry.id,
+          queued: notificationQueue.waitingEntries().includes(entry),
+        });
       }, res); return;
+    }
+
+    if (req.method === 'GET' && p === '/notifications') {
+      removeDestroyedWindows();
+      jsonOk(res, {
+        active: activeWindows.map(notificationData),
+        queued: notificationQueue.waitingEntries().map(notificationData),
+      });
+      return;
     }
 
     // Schedule a future reminder
@@ -287,12 +370,13 @@ function startHttpServer() {
       }, res); return;
     }
 
-    // Dismiss all active windows
+    // Dismiss all foreground and waiting notifications without refilling.
     if (req.method === 'POST' && p === '/dismiss') {
       removeDestroyedWindows();
       const closed = activeWindows.length;
-      [...activeWindows].forEach(destroyNotificationWindow);
-      jsonOk(res, { success:true, closed });
+      const clearedQueued = notificationQueue.waitingSize();
+      notificationQueue.clear().forEach(destroyNotificationWindow);
+      jsonOk(res, { success:true, closed, clearedQueued });
       return;
     }
 
@@ -326,6 +410,7 @@ function jsonErr(res, code, msg) {
 // ─── App lifecycle ───
 app.whenReady().then(() => {
   startHttpServer();
+  loadNotifications();
   startScheduler();
   const args = process.argv;
   const idx = args.indexOf('--notify');
@@ -338,6 +423,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {});
 app.on('before-quit', () => {
+  isQuitting = true;
+  saveNotifications();
   if (schedulerTimer) clearInterval(schedulerTimer);
   if (httpServer) httpServer.close();
 });

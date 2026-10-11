@@ -174,7 +174,7 @@ function sendNotification(method, params) {
 const TOOLS = [
   {
     name: 'notify',
-    description: 'Display an instant desktop notification popup with beeping alarm. Persists until user dismisses.',
+    description: 'Show a desktop notification using the saved sound preference. Up to seven cards are visible; additional notifications wait in FIFO order until a card is dismissed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -240,7 +240,8 @@ async function handleToolCall(name, args) {
     if (name === 'notify') {
       const res = await httpPost('/notify', { title: args.title || 'Agent Notification', message: args.message || '' });
       if (res.data && res.data.success) {
-        return { content: [{ type: 'text', text: `Notification displayed. Title: ${args.title || 'Agent Notification'}` }] };
+        const status = res.data.queued ? 'Notification queued for display' : 'Notification displayed';
+        return { content: [{ type: 'text', text: `${status}. Title: ${args.title || 'Agent Notification'}` }] };
       }
       return { content: [{ type: 'text', text: `Failed: ${JSON.stringify(res.data)}` }], isError: true };
     }
