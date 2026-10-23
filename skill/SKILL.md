@@ -168,7 +168,9 @@ Deletion flow:
 - The notifier keeps beeping until the user dismisses it or turns off its sound (unless `silent: true` or the saved default is muted).
 - Foreground capacity follows the primary display's available work area and measured card heights, with no fixed card count. The oldest card stays at the bottom. Notifications that do not fit wait in FIFO order without beeping and fill available space after dismissal or layout changes; smaller later cards never skip the queue head.
 - Screen changes and settings expansion recalculate the stack. Newer cards that no longer fit return to the front of the waiting queue, stop beeping, and resume in order when space returns.
-- Unacknowledged foreground and queued notifications persist across service restarts in `<project-dir>/notifications.json`.
+- Unacknowledged notifications are committed to `<project-dir>/notifications.sqlite` before success is reported. The disk queue retains FIFO order across restarts; memory holds only visible cards and at most one waiting head.
+- Returning cards to the disk queue releases their Electron windows and preserves their sound/settings state. `GET /notifications` pages the backlog with `limit` (1–100), `cursor`, `queuedTotal`, and `nextCursor`; it does not load all waiting notifications.
+- The first start imports the legacy `notifications.json` record by record and retains that file as an unchanged backup; the migration marker prevents acknowledged legacy notifications from returning.
 - `send-notify.js` auto-launches the Electron service if needed (health check on `127.0.0.1:17329`).
 - Scheduled reminders persist across restarts in `<project-dir>/schedules.json`.
 

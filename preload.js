@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('ccNotify', {
   dismiss: () => {
     ipcRenderer.send('dismiss');
   },
+  reportCardState: (state) => {
+    ipcRenderer.send('card-state', state);
+  },
   reportHeight: (h, revision) => {
     ipcRenderer.send('report-height', h, revision);
   },

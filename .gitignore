@@ -4,6 +4,8 @@ _msg.json
 schedules.json
 notifications.json
 notifications.json.tmp
+notifications.sqlite
+notifications.sqlite-*
 settings.json
 settings.json.tmp
 output/playwright/

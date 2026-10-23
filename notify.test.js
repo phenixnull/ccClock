@@ -17,6 +17,7 @@ function createCard(options = {}) {
   const revisions = [];
   const style = {};
   const saved = [];
+  const states = [];
   let dismissed = 0;
 
   function element(id) {
@@ -73,6 +74,7 @@ function createCard(options = {}) {
         : { success: true, settings: { soundEnabled: enabled } };
     },
     reportHeight(height, revision) { heights.push(height); revisions.push(revision); },
+    reportCardState(state) { states.push({ ...state }); },
     dismiss() { dismissed++; },
   };
 
@@ -90,7 +92,7 @@ function createCard(options = {}) {
   });
 
   return {
-    elements, callbacks, intervals, contexts, heights, revisions, style, saved,
+    elements, callbacks, intervals, contexts, heights, revisions, style, saved, states,
     prepare(data = {}) {
       callbacks.show({ title: 'Task', message: 'Done', revision: 1, maxCardHeight: 480, ...data });
     },
@@ -222,4 +224,16 @@ test('display changes update the maximum height and tag the new measurement revi
   assert.equal(card.style['--card-max-height'], '280px');
   assert.equal(card.revisions.at(-1), 2);
   assert.equal(card.intervals.size, 0);
+});
+
+test('recreating a card restores its sound choice and expanded settings from disk', () => {
+  const card = createCard();
+  card.show({ soundEnabled: false, settingsOpen: true });
+  assert.equal(card.elements['settings-panel'].hidden, false);
+  assert.equal(card.intervals.size, 0);
+  card.elements['sound-toggle'].click();
+  assert.equal(card.states.at(-1).currentSoundEnabled, true);
+  assert.equal(card.states.at(-1).settingsOpen, true);
+  card.callbacks.keydown({ key: 'Escape' });
+  assert.equal(card.states.at(-1).settingsOpen, false);
 });

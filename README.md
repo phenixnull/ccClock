@@ -19,7 +19,11 @@
 
 设置展开或收起、屏幕分辨率或缩放变化、任务栏改变可用空间时，都会重新计算。已有卡片因空间缩小而放不下时，较新的卡片暂时返回队列并停止蜂鸣，排在原有后台通知之前；空间恢复后按原顺序继续显示。
 
-即时通知、定时提醒和周期提醒共用这条队列。未确认的前台通知和后台通知保存到本机 `notifications.json`，重启服务后会继续按原顺序显示和排队。
+即时通知、定时提醒和周期提醒共用这条队列。所有未确认通知先写入本机 **`notifications.sqlite` 文件队列**，重启服务后会继续按原顺序显示和排队。
+
+后台积压不会全部加载到内存：内存只保留当前显示的卡片和最多一条用于测量的队首通知。卡片因屏幕空间变化退回后台时，会销毁对应窗口，声音开关和设置面板状态随通知保存；有空位时再从文件读取并创建。SQLite 页面缓存目标为 2 MiB，单次请求最多 1 MiB，通知列表按页读取。
+
+旧版 `notifications.json` 会在首次启动时逐条迁入数据库，迁移完成后记录标记，避免重启时重复导入已确认通知。原 JSON 文件保留为迁移前备份，之后不再更新。积压仍会占用磁盘空间；确认关闭后删除对应记录，数据库内释放的空间可供后续通知复用。
 
 ## 安装
 
@@ -102,7 +106,7 @@ node .\send-notify.js --list --json
 node .\send-notify.js --delete <id>
 ```
 
-提醒数据保存在 `schedules.json`，未确认通知保存在 `notifications.json`，默认声音设置保存在 `settings.json`。本地 Codex skill 会把临时 payload 写到 `.cc-notify-payload.json`；这些运行时文件都会被 Git 忽略。
+提醒数据保存在 `schedules.json`，未确认通知保存在 `notifications.sqlite`，默认声音设置保存在 `settings.json`。SQLite 运行时可能生成同名的 `-wal`、`-shm` 文件，运行期间请保留它们；移动数据库备份前应先正常退出服务。本地 Codex skill 会把临时 payload 写到 `.cc-notify-payload.json`；这些运行时文件都会被 Git 忽略。
 
 ## HTTP API
 
@@ -117,7 +121,11 @@ node .\send-notify.js --delete <id>
 - `POST /schedule/delete`
 - `POST /dismiss`
 
-`GET /health` 中，`capacityMode` 为 `screen-space`，`workArea` 是主屏幕可用区域，`availableHeight` 是扣除边距后的可用高度，`usedHeight` 是前台卡片和间距占用的高度。`windows` 是前台卡片数，`queuedNotifications` 是后台等待数，`notifications` 是全部未确认通知数；`pending` 和 `completed` 仍表示定时提醒任务数。`GET /notifications` 返回 `active` 和 `queued` 两个按收到顺序排列的列表。`POST /notify` 返回通知 `id` 和响应时是否在后台等待的 `queued`；`POST /dismiss` 会清空前台和后台通知。
+`GET /health` 中，`capacityMode` 为 `screen-space`，`queueStorage` 为 `sqlite`，`residentNotifications` 为当前在内存中的通知条数（前台数量加最多一条队首）。`workArea` 是主屏幕可用区域，`availableHeight` 是扣除边距后的可用高度，`usedHeight` 是前台卡片和间距占用的高度。`windows` 是前台卡片数，`queuedNotifications` 是后台等待数，`notifications` 是全部未确认通知数；`pending` 和 `completed` 仍表示定时提醒任务数。
+
+`GET /notifications?limit=100&cursor=0` 返回前台 `active` 列表和当前页的后台 `queued` 列表。`queuedTotal` 是后台总数，`nextCursor` 非空时可作为下一页的 `cursor`。每页最多 100 条，后台内容目标上限为 1 MiB（至少返回一条通知）；不再一次返回全部积压通知。游标基于通知的 `sequence`，关闭前面的卡片不会导致后续分页跳项。
+
+`POST /notify` 返回通知 `id` 和响应时是否在后台等待的 `queued`；只有成功写入磁盘后才返回成功。`POST /dismiss` 会清空前台和后台通知。
 
 示例：
 

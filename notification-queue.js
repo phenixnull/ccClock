@@ -1,41 +1,53 @@
 function createNotificationQueue(options = {}) {
-  const canActivate = typeof options.canActivate === 'function' ? options.canActivate : () => true;
-  const canKeep = typeof options.canKeep === 'function' ? options.canKeep : () => true;
-  const onPrepare = typeof options.onPrepare === 'function' ? options.onPrepare : () => {};
-  const onActivate = typeof options.onActivate === 'function' ? options.onActivate : () => {};
-  const onDeactivate = typeof options.onDeactivate === 'function' ? options.onDeactivate : () => {};
-  const onChange = typeof options.onChange === 'function' ? options.onChange : () => {};
+  const { store } = options;
+  if (!store) throw new TypeError('A notification store is required');
+  const canActivate = options.canActivate || (() => true);
+  const canKeep = options.canKeep || (() => true);
+  const onPrepare = options.onPrepare || (() => {});
+  const onActivate = options.onActivate || (() => {});
+  const onDeactivate = options.onDeactivate || (() => {});
   const entries = [];
-  const waiting = [];
+  let head = null;
   let filling = false;
 
-  function fillSlots() {
+  function lastActiveSequence() {
+    return entries.at(-1)?.sequence || 0;
+  }
+
+  function release(entry) {
+    onDeactivate(entry);
+  }
+
+  function refresh() {
     if (filling) return;
     filling = true;
     try {
-      // Resizing a card or shrinking a display may put newer cards back in line.
-      // They stay ahead of all notifications that arrived after them.
+      // Active cards form a prefix of the disk queue. Returning a suffix to disk
+      // preserves FIFO without copying or indexing the backlog.
       let keep = entries.length;
       while (keep > 0 && !canKeep(entries.slice(0, keep))) keep--;
-      const overflow = entries.splice(keep);
-      waiting.unshift(...overflow);
-      overflow.forEach(onDeactivate);
+      if (keep < entries.length) {
+        if (head) { release(head); head = null; }
+        const overflow = entries.splice(keep);
+        overflow.forEach(entry => {
+          store.update(entry);
+          release(entry);
+        });
+      }
 
-      while (waiting.length > 0) {
-        const next = waiting[0];
-        onPrepare(next);
-        // Never skip a large or still-unmeasured head to show a later card.
-        if (!canActivate(next, entries)) break;
-        const entry = waiting.shift();
+      while (true) {
+        if (!head) head = store.peekAfter(lastActiveSequence());
+        if (!head) break;
+        onPrepare(head);
+        if (!canActivate(head, entries)) break;
+        const entry = head;
+        head = null;
         entries.push(entry);
         try {
           onActivate(entry);
         } catch (error) {
-          const index = entries.indexOf(entry);
-          if (index !== -1) {
-            entries.splice(index, 1);
-            waiting.unshift(entry);
-          }
+          entries.pop();
+          head = entry;
           throw error;
         }
       }
@@ -44,81 +56,56 @@ function createNotificationQueue(options = {}) {
     }
   }
 
-  function refresh() {
-    try {
-      fillSlots();
-    } finally {
-      onChange();
-    }
-  }
-
   function add(entry) {
-    waiting.push(entry);
+    const wasEmpty = store.size() === entries.length;
+    store.append(entry); // Commit before allowing display or reporting success.
+    if (wasEmpty && !head) head = entry;
     refresh();
     return entry;
   }
 
   function removeById(id) {
-    for (const list of [entries, waiting]) {
-      const index = list.findIndex((entry) => entry.id === id);
-      if (index !== -1) {
-        const removed = list.splice(index, 1)[0];
-        refresh();
-        return removed;
-      }
-    }
-    return null;
-  }
-
-  function removeWhere(predicate) {
-    let removed = 0;
-    for (const list of [entries, waiting]) {
-      for (let index = list.length - 1; index >= 0; index -= 1) {
-        if (predicate(list[index])) {
-          list.splice(index, 1);
-          removed++;
-        }
-      }
-    }
-    if (removed > 0) {
-      refresh();
-    }
+    const index = entries.findIndex(entry => entry.id === id);
+    const resident = index !== -1 ? entries[index] : head?.id === id ? head : null;
+    const removed = resident || store.get(id);
+    if (!removed || !store.remove(id)) return null;
+    if (index !== -1) entries.splice(index, 1);
+    if (head?.id === id) head = null;
+    release(removed);
+    refresh();
     return removed;
   }
 
   function clear() {
-    // Empty both lists before window close callbacks can refill the foreground.
-    const removed = [...entries.splice(0), ...waiting.splice(0)];
-    if (removed.length > 0) onChange();
+    store.clear();
+    // Only resident windows need cleanup. Never load the disk backlog.
+    const removed = [...entries.splice(0), ...(head ? [head] : [])];
+    head = null;
+    removed.forEach(release);
     return removed;
   }
 
   return {
     add,
     refresh,
-    entries() {
-      return entries;
-    },
-    ids() {
-      return entries.map((entry) => entry.id);
-    },
-    waitingEntries() {
-      return waiting;
-    },
-    waitingIds() {
-      return waiting.map((entry) => entry.id);
-    },
-    waitingSize() {
-      return waiting.length;
-    },
-    totalSize() {
-      return entries.length + waiting.length;
-    },
     clear,
     removeById,
-    removeWhere,
-    size() {
-      return entries.length;
+    entries() { return entries; },
+    ids() { return entries.map(entry => entry.id); },
+    residentEntries() { return [...entries, ...(head ? [head] : [])]; },
+    candidate() { return head; },
+    isActive(id) { return entries.some(entry => entry.id === id); },
+    listWaiting({ cursor = 0, limit = 100 } = {}) {
+      if (!Number.isSafeInteger(cursor) || cursor < 0) throw new TypeError('Invalid notification cursor');
+      return store.listAfter(Math.max(cursor, lastActiveSequence()), limit);
+    },
+    waitingSize() { return store.size() - entries.length; },
+    totalSize() { return store.size(); },
+    size() { return entries.length; },
+    updateState(entry, changes) {
+      const updated = { ...entry, ...changes };
+      store.update(updated);
+      Object.assign(entry, changes);
     },
   };
 }

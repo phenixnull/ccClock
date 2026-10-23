@@ -229,12 +229,23 @@
     soundToggle.setAttribute('aria-checked', String(soundEnabled));
     card.classList.toggle('muted', !soundEnabled);
     document.getElementById('sound-status').textContent = soundEnabled ? '声音已开启' : '声音已关闭';
+    reportCardState();
+  }
+
+  function reportCardState() {
+    if (isForeground && !isDismissing) {
+      window.ccNotify.reportCardState({
+        currentSoundEnabled: soundEnabled,
+        settingsOpen: !settingsPanel.hidden,
+      });
+    }
   }
 
   function showSettings(open) {
     settingsPanel.hidden = !open;
     settingsButton.setAttribute('aria-expanded', String(open));
     if (open) soundToggle.focus();
+    reportCardState();
     reportHeight();
   }
 
@@ -248,7 +259,7 @@
     isDismissing = true;
     setCurrentSound(false);
     card.classList.add('dismissing');
-    setTimeout(() => window.ccNotify.dismiss(), 150);
+    window.ccNotify.dismiss();
   }
 
   window.ccNotify.onShowNotification((data) => {
@@ -262,7 +273,9 @@
     soundToggle.disabled = false;
     defaultSoundToggle.disabled = false;
     updateDefaultSound(data.defaultSoundEnabled !== false);
-    setCurrentSound(data.soundEnabled !== false && data.silent !== true);
+    settingsPanel.hidden = data.settingsOpen !== true;
+    settingsButton.setAttribute('aria-expanded', String(!settingsPanel.hidden));
+    setCurrentSound(data.soundEnabled ?? (data.silent !== true));
     reportHeight();
   });
   window.ccNotify.onSettingsChanged((settings) => {

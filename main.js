@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { createNotificationSettings } = require('./notification-settings');
 const { createNotificationQueue } = require('./notification-queue');
+const { createNotificationStore } = require('./notification-store');
 const {
   MIN_WINDOW_HEIGHT,
   MAX_WINDOW_HEIGHT,
@@ -19,26 +20,27 @@ const {
   normalizeScheduleStore,
 } = require('./schedule-engine');
 
+if (!app.requestSingleInstanceLock()) app.exit(0);
+
 // ─── State ───
+const notificationStore = createNotificationStore(path.join(__dirname, 'notifications.sqlite'));
 const notificationQueue = createNotificationQueue({
+  store: notificationStore,
   canKeep: entries => getNotificationLayout(entries, workArea) !== null,
   canActivate: (entry, entries) => !isQuitting && entry.ready
     && entries.every(active => active.ready)
     && getNotificationLayout([...entries, entry], workArea) !== null,
   onPrepare: prepareNotificationWindow,
   onActivate: showNotificationWindow,
-  onDeactivate: hideNotificationWindow,
-  onChange: saveNotifications,
+  onDeactivate: releaseNotificationWindow,
 });
 const activeWindows = notificationQueue.entries(); // [{ id, win, height, colorIndex }]
-let restoringNotifications = false;
 let isQuitting = false;
 let httpServer = null;
 let scheduleStore = { pending: [], completed: [] };
 let schedulerTimer = null;
 const PORT = 17329;
 const SCHEDULES_FILE = path.join(__dirname, 'schedules.json');
-const NOTIFICATIONS_FILE = path.join(__dirname, 'notifications.json');
 const notificationSettings = createNotificationSettings(path.join(__dirname, 'settings.json'));
 let workArea = null;
 let layoutRevision = 0;
@@ -62,45 +64,8 @@ function notificationData(entry) {
     message: entry.message,
     silent: entry.silent,
     colorIndex: entry.colorIndex,
+    sequence: entry.sequence,
   };
-}
-
-function saveNotifications() {
-  if (restoringNotifications) return;
-  try {
-    const notifications = [
-      ...activeWindows,
-      ...notificationQueue.waitingEntries(),
-    ].map(notificationData);
-    fs.writeFileSync(NOTIFICATIONS_FILE + '.tmp', JSON.stringify(notifications, null, 2), 'utf8');
-    fs.renameSync(NOTIFICATIONS_FILE + '.tmp', NOTIFICATIONS_FILE);
-  } catch (e) {
-    console.error('[cc-notify] Save notifications error:', e.message);
-  }
-}
-
-function loadNotifications() {
-  let saved;
-  try {
-    if (!fs.existsSync(NOTIFICATIONS_FILE)) return;
-    saved = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf8'));
-    if (!Array.isArray(saved)) throw new Error('Expected a notification array');
-  } catch (e) {
-    console.error('[cc-notify] Load notifications error:', e.message);
-    return;
-  }
-
-  restoringNotifications = true;
-  try {
-    for (const data of saved) {
-      if (typeof data?.title === 'string' && typeof data.message === 'string') {
-        createNotificationWindow(data.title, data.message, data);
-      }
-    }
-  } finally {
-    restoringNotifications = false;
-    saveNotifications();
-  }
 }
 
 // ─── Schedules Persistence ───
@@ -120,13 +85,17 @@ function saveSchedules() {
 function startScheduler() {
   loadSchedules();
   schedulerTimer = setInterval(() => {
-    const result = evaluateSchedules(scheduleStore, new Date());
-    if (result.due.length > 0) {
-      result.due.forEach(s => createNotificationWindow(s.title, s.message));
-    }
-    if (result.changed) {
-      scheduleStore = result.store;
-      saveSchedules();
+    try {
+      const result = evaluateSchedules(scheduleStore, new Date());
+      if (result.due.length > 0) {
+        result.due.forEach(s => createNotificationWindow(s.title, s.message));
+      }
+      if (result.changed) {
+        scheduleStore = result.store;
+        saveSchedules();
+      }
+    } catch (error) {
+      console.error('[cc-notify] Scheduled notification failed:', error.message);
     }
   }, 1000);
 }
@@ -138,17 +107,10 @@ function generateHTML(t) {
 }
 // ─── Window positioning ───
 function removeDestroyedWindows() {
-  // Only the head of the waiting queue needs a hidden window for measurement.
-  notificationQueue.removeWhere((entry) => entry.win && entry.win.isDestroyed());
-}
-
-function destroyNotificationWindow(entry) {
-  entry.finishMeasurement?.();
-  if (!entry || !entry.win || entry.win.isDestroyed()) {
-    return;
+  if (isQuitting) return;
+  for (const entry of notificationQueue.residentEntries()) {
+    if (entry.win?.isDestroyed()) notificationQueue.removeById(entry.id);
   }
-
-  entry.win.destroy();
 }
 
 function repositionWindows() {
@@ -171,7 +133,7 @@ function updateDisplayLayout() {
   workArea = { ...screen.getPrimaryDisplay().workArea };
   layoutRevision++;
   const space = getNotificationSpace(workArea);
-  for (const entry of [...activeWindows, ...notificationQueue.waitingEntries()]) {
+  for (const entry of notificationQueue.residentEntries()) {
     if (!entry.win || entry.win.isDestroyed()) continue;
     entry.ready = false;
     entry.win.setSize(Math.max(21, space.width), entry.win.getBounds().height);
@@ -182,7 +144,7 @@ function updateDisplayLayout() {
 }
 
 function findNotification(sender) {
-  return [...activeWindows, ...notificationQueue.waitingEntries()]
+  return notificationQueue.residentEntries()
     .find(entry => entry.win && !entry.win.isDestroyed() && entry.win.webContents === sender);
 }
 
@@ -234,8 +196,8 @@ function prepareNotificationWindow(entry) {
     win.webContents.send('show-notification', {
       title: entry.title,
       message: entry.message,
-      silent: entry.silent,
-      soundEnabled: settings.soundEnabled && !entry.silent,
+      soundEnabled: entry.currentSoundEnabled ?? (settings.soundEnabled && !entry.silent),
+      settingsOpen: entry.settingsOpen === true,
       defaultSoundEnabled: settings.soundEnabled,
       ...layoutConstraints(),
     });
@@ -248,7 +210,8 @@ function prepareNotificationWindow(entry) {
 
   win.on('closed', () => {
     entry.finishMeasurement?.();
-    if (isQuitting) return;
+    if (isQuitting || entry.win !== win) return;
+    entry.win = null;
     notificationQueue.removeById(entry.id);
     repositionWindows();
   });
@@ -259,22 +222,28 @@ function showNotificationWindow(entry) {
   const win = entry.win;
   repositionWindows();
   const settings = notificationSettings.get();
+  const currentSoundEnabled = entry.currentSoundEnabled ?? (settings.soundEnabled && !entry.silent);
+  if (entry.currentSoundEnabled !== currentSoundEnabled) {
+    notificationQueue.updateState(entry, { currentSoundEnabled });
+  }
   win.webContents.send('notification-visibility', {
     active: true,
     defaultSoundEnabled: settings.soundEnabled,
-    ...(!entry.shown ? { soundEnabled: settings.soundEnabled && !entry.silent } : {}),
+    soundEnabled: currentSoundEnabled,
   });
-  entry.shown = true;
   win.setSkipTaskbar(false);
   win.show();
   win.setAlwaysOnTop(true, 'screen-saver');
 }
 
-function hideNotificationWindow(entry) {
-  if (!entry.win || entry.win.isDestroyed()) return;
-  entry.win.webContents.send('notification-visibility', { active: false });
-  entry.win.hide();
-  entry.win.setSkipTaskbar(true);
+function releaseNotificationWindow(entry) {
+  entry.finishMeasurement?.();
+  const win = entry.win;
+  entry.win = null;
+  entry.ready = false;
+  entry.loaded = false;
+  // Detach before destruction so returning to disk cannot acknowledge a card.
+  if (win && !win.isDestroyed()) win.destroy();
 }
 // ─── IPC ───
 ipcMain.handle('set-default-sound', (event, enabled) => {
@@ -283,7 +252,7 @@ ipcMain.handle('set-default-sound', (event, enabled) => {
 
   try {
     const settings = notificationSettings.setSoundEnabled(enabled);
-    [...activeWindows, ...notificationQueue.waitingEntries()].forEach(({ win }) => {
+    notificationQueue.residentEntries().forEach(({ win }) => {
       if (win && !win.isDestroyed()) win.webContents.send('settings-changed', settings);
     });
     return { success: true, settings };
@@ -295,20 +264,50 @@ ipcMain.handle('set-default-sound', (event, enabled) => {
 
 ipcMain.on('dismiss', (event) => {
   const entry = findNotification(event.sender);
-  // Honor an acknowledgement even if a screen change hid the card during
-  // the renderer's closing animation.
-  if (entry) entry.win.destroy();
+  if (!entry || entry.dismissing || isQuitting) return;
+  entry.dismissing = true;
+  // Keep the acknowledgement even if the card returns to disk during animation.
+  setTimeout(() => {
+    if (isQuitting) return;
+    try {
+      notificationQueue.removeById(entry.id);
+      repositionWindows();
+    } catch (error) {
+      entry.dismissing = false;
+      console.error('[cc-notify] Dismiss failed:', error.message);
+    }
+  }, 150);
+});
+
+ipcMain.on('card-state', (event, state) => {
+  if (isQuitting) return;
+  const entry = findNotification(event.sender);
+  if (!entry || !notificationQueue.isActive(entry.id)) return;
+  if (typeof state?.currentSoundEnabled !== 'boolean' || typeof state.settingsOpen !== 'boolean') return;
+  if (entry.currentSoundEnabled === state.currentSoundEnabled && entry.settingsOpen === state.settingsOpen) return;
+  try {
+    notificationQueue.updateState(entry, {
+      currentSoundEnabled: state.currentSoundEnabled,
+      settingsOpen: state.settingsOpen,
+    });
+  } catch (error) {
+    console.error('[cc-notify] Card state save failed:', error.message);
+  }
 });
 
 ipcMain.on('report-height', (event, contentHeight, revision) => {
   const entry = findNotification(event.sender);
-  if (!entry || revision !== layoutRevision || !Number.isFinite(contentHeight)) return;
+  if (isQuitting || !entry || revision !== layoutRevision || !Number.isFinite(contentHeight)) return;
   const height = Math.min(Math.max(Math.ceil(contentHeight), MIN_WINDOW_HEIGHT), MAX_WINDOW_HEIGHT);
   if (entry.ready && entry.height === height) return;
   entry.height = height;
   entry.ready = true;
-  notificationQueue.refresh();
-  repositionWindows();
+  try {
+    notificationQueue.refresh();
+    repositionWindows();
+  } catch (error) {
+    console.error('[cc-notify] Notification layout failed:', error.message);
+  }
   entry.finishMeasurement?.();
 });
 
@@ -339,6 +338,8 @@ function startHttpServer() {
         status:'ok',
         service:'cc-notify',
         capacityMode: 'screen-space',
+        queueStorage: 'sqlite',
+        residentNotifications: notificationQueue.residentEntries().length,
         workArea,
         availableHeight: getNotificationSpace(workArea).height,
         usedHeight: getStackHeight(activeWindows),
@@ -358,7 +359,7 @@ function startHttpServer() {
       readBody(req, (data) => {
         const entry = createNotificationWindow(data.title || 'Agent Notification', data.message || 'Task completed.', { silent: data.silent === true });
         const respond = () => jsonOk(res, {
-          success: true, id: entry.id, queued: notificationQueue.waitingEntries().includes(entry),
+          success: true, id: entry.id, queued: !notificationQueue.isActive(entry.id),
         });
         // Return the measured admission result for a newly prepared queue head.
         if (entry.measurement && !entry.ready) {
@@ -375,10 +376,20 @@ function startHttpServer() {
 
     if (req.method === 'GET' && p === '/notifications') {
       removeDestroyedWindows();
-      jsonOk(res, {
-        active: activeWindows.map(notificationData),
-        queued: notificationQueue.waitingEntries().map(notificationData),
-      });
+      try {
+        const page = notificationQueue.listWaiting({
+          cursor: Number(url.searchParams.get('cursor') || 0),
+          limit: Number(url.searchParams.get('limit') || 100),
+        });
+        jsonOk(res, {
+          active: activeWindows.map(notificationData),
+          queued: page.items.map(notificationData),
+          queuedTotal: notificationQueue.waitingSize(),
+          nextCursor: page.nextCursor,
+        });
+      } catch (error) {
+        jsonErr(res, error instanceof TypeError ? 400 : 500, error.message);
+      }
       return;
     }
 
@@ -451,8 +462,12 @@ function startHttpServer() {
       removeDestroyedWindows();
       const closed = activeWindows.length;
       const clearedQueued = notificationQueue.waitingSize();
-      notificationQueue.clear().forEach(destroyNotificationWindow);
-      jsonOk(res, { success:true, closed, clearedQueued });
+      try {
+        notificationQueue.clear();
+        jsonOk(res, { success:true, closed, clearedQueued });
+      } catch (error) {
+        jsonErr(res, 500, error.message);
+      }
       return;
     }
 
@@ -462,16 +477,33 @@ function startHttpServer() {
   httpServer.listen(PORT, '127.0.0.1', () => {
     console.log('[cc-notify] Ready on http://127.0.0.1:' + PORT);
   });
-  httpServer.on('error', err => { console.error('[cc-notify] Port error:', err.code); });
+  httpServer.on('error', err => {
+    console.error('[cc-notify] Port error:', err.code);
+    app.quit();
+  });
 }
 
 // ─── Helpers ───
 function readBody(req, cb, res) {
   const chunks = [];
-  req.on('data', c => chunks.push(c));
+  let bytes = 0;
+  req.on('data', c => {
+    bytes += c.length;
+    if (bytes > 1024 * 1024) {
+      if (!res.writableEnded) jsonErr(res, 413, 'Notification request exceeds 1 MiB');
+      chunks.length = 0;
+    } else if (!res.writableEnded) chunks.push(c);
+  });
   req.on('end', () => {
-    try { cb(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
-    catch (e) { jsonErr(res, 400, 'Invalid JSON: ' + e.message); }
+    if (res.writableEnded) return;
+    let data;
+    try { data = JSON.parse(Buffer.concat(chunks).toString('utf-8')); }
+    catch (error) { jsonErr(res, 400, 'Invalid JSON: ' + error.message); return; }
+    try { cb(data); }
+    catch (error) {
+      console.error('[cc-notify] Request failed:', error.message);
+      jsonErr(res, 500, 'Notification could not be saved: ' + error.message);
+    }
   });
 }
 function jsonOk(res, obj) {
@@ -484,13 +516,14 @@ function jsonErr(res, code, msg) {
 }
 
 // ─── App lifecycle ───
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  const imported = await notificationStore.migrateLegacy(path.join(__dirname, 'notifications.json'));
+  if (imported) console.log('[cc-notify] Imported legacy notifications:', imported);
+  startHttpServer();
   updateDisplayLayout();
   screen.on('display-metrics-changed', updateDisplayLayout);
   screen.on('display-added', updateDisplayLayout);
   screen.on('display-removed', updateDisplayLayout);
-  startHttpServer();
-  loadNotifications();
   startScheduler();
   const args = process.argv;
   const idx = args.indexOf('--notify');
@@ -499,12 +532,15 @@ app.whenReady().then(() => {
   } else {
     console.log('[cc-notify] Server mode with scheduler active.');
   }
+}).catch(error => {
+  console.error('[cc-notify] Startup failed:', error.message);
+  app.quit();
 });
 
 app.on('window-all-closed', () => {});
 app.on('before-quit', () => {
   isQuitting = true;
-  saveNotifications();
   if (schedulerTimer) clearInterval(schedulerTimer);
   if (httpServer) httpServer.close();
 });
+app.on('will-quit', () => notificationStore.close());
